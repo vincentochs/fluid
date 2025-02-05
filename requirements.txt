@@ -7,3 +7,4 @@ streamlit_option_menu==0.3.6
 torch==2.2.1
 altair==4.0
 matplotlib
+imblearn
