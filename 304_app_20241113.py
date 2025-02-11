@@ -2,7 +2,7 @@
 """
 Created on Fri Nov  1 22:10:54 2024
 
-@author: Edgar David
+@author: Vincent Ochs
 """
 
 ###############################################################################
@@ -71,10 +71,10 @@ def resume(model, filename):
 ###############################################################################
 # PARAMETERS SECTION
 # Define operation time and fluid sume range to simulate
-MINIMUM_OPERATION_TIME = 100
-MINIMUM_FLUID_SUM = 100
-MAXIMUM_OPERATION_TIME = 600
-MAXIMUM_FLUID_SUM = 1000
+MINIMUM_OPERATION_TIME = 45
+MINIMUM_FLUID_SUM = 0
+MAXIMUM_OPERATION_TIME = 530
+MAXIMUM_FLUID_SUM = 20_000
 
 
 # Define dictionary for model inputs names
@@ -206,105 +206,37 @@ def initialize_app():
     return model , preprocesor
 
 # Function to parser input
-def parser_input(df_input , model ,preprocesor ,  initial_operation_time , initial_fluid_sum):
-    
-    # Encode categorical features
-    for i in df_input.columns.tolist():
-        if i in list(INPUT_FEATURES.keys()):
-            df_input[i] = df_input[i].map(INPUT_FEATURES[i])
-    print('Features encoded')
-    # Put clinic number ad hoc
-    df_input['data_group_encoded'] = 8
-    # Define range of operation time in minutes and Fluid sum in mL to simulate
-    range_operation_time = list(range(MINIMUM_OPERATION_TIME , MAXIMUM_OPERATION_TIME + 5, 5))
-    range_fluid_sum = list(range(MINIMUM_FLUID_SUM , MAXIMUM_FLUID_SUM + 10 , 10))
-    
-    # Generate 2 separated dataframes for independent fluid / operation simulation
-    df_operation = df_input.copy()
-    df_fluid = df_input.copy()
-    # Add initial values of operation and fluid
-    df_operation['Fluid_sum'] = initial_fluid_sum
-    df_fluid['Operation time (min)'] = initial_operation_time
-    # Generate n times the df for simulation
-    df_operation = pd.concat([df_operation] * len(range_operation_time) , ignore_index = True)
-    df_fluid = pd.concat([df_fluid] * len(range_fluid_sum) , ignore_index = True)
-    # Put simulated values
-    df_operation['Operation time (min)'] = range_operation_time
-    df_fluid['Fluid_sum'] = range_fluid_sum
-    # Make predictions
-    model.eval()
-    with torch.no_grad():
-        test_f1 = torch.tensor(df_operation['Fluid_sum'].values).float().view(-1, 1)
-        test_f2 = torch.tensor(df_operation['Operation time (min)'].values).float().view(-1, 1)
-        test_other = torch.tensor(df_operation.drop(columns = ['Fluid_sum' , 'Operation time (min)']).values).float()
-
-        test_output = model(test_f1, test_f2, test_other).squeeze()
-    
-    df_operation['pred_proba'] = test_output.detach().numpy() * 100
-    
-    model.eval()
-    with torch.no_grad():
-        test_f1 = torch.tensor(df_fluid['Fluid_sum'].values).float().view(-1, 1)
-        test_f2 = torch.tensor(df_fluid['Operation time (min)'].values).float().view(-1, 1)
-        test_other = torch.tensor(df_fluid.drop(columns = ['Fluid_sum' , 'Operation time (min)']).values).float()
-
-        test_output = model(test_f1, test_f2, test_other).squeeze()
-    df_fluid['pred_proba'] = test_output.detach().numpy() * 100
-    # Sort by probability
-    df_operation = df_operation.sort_values(by = 'pred_proba')
-    df_fluid = df_fluid.sort_values(by = 'pred_proba')
-    #st.dataframe(df_operation.head(50))
-    #st.write('-' * 50)
-    #st.dataframe(df_fluid.head(100))
-    # Make line plots for each dataframe
-    st.write('Simulation for Surgery Duration:')
-    x = df_operation.sort_values(by = 'Operation time (min)')['Operation time (min)'].values
-    x = np.array(range_operation_time)
-    x_plot = np.linspace(x.min(), x.max(), 5000) 
-    y = df_operation['pred_proba'].values
-    print(x)
-    y_plot = make_interp_spline(x, y, k=3)
-    y_plot_smooth = y_plot(x_plot)
-    
-    # Create figure and plot
-    fig, ax = plt.subplots()
-    ax.plot(x_plot, y_plot_smooth)
-    ax.set_xlabel("Operation time (min)")
-    ax.set_ylabel("Predicted Probability")
-    st.pyplot(fig)
-    
-    st.write('Simulation for Fluid Volumen:')
-    x = df_fluid.sort_values(by = 'Fluid_sum')['Fluid_sum'].values
-    x = np.array(range_fluid_sum )
-    x_plot = np.linspace(x.min(), x.max(), 5000) 
-    y = df_fluid['pred_proba'].values
-    print(x)
-    y_plot = make_interp_spline(x, y, k=3)
-    y_plot_smooth = y_plot(x_plot)
-    
-    # Create figure and plot
-    fig, ax = plt.subplots()
-    ax.plot(x_plot, y_plot_smooth)
-    ax.set_xlabel("Fluid Volumen")
-    ax.set_ylabel("Predicted Probability")
-    st.pyplot(fig)
-    
-    # Make 3D surface
-    combinations = list(product(range_operation_time, range_fluid_sum))
-    df_combinations = pd.DataFrame(combinations, columns=[ 'Operation time (min)', 'Fluid_sum'])
-    
-    df_repeated = pd.concat([df_input] * df_combinations.shape[0], ignore_index=True)
-    
-    # Concat df
-    df_combinations = pd.concat([df_combinations.reset_index(drop = True),
-                                 df_repeated.reset_index(drop = True)] , axis = 1)
+def parser_input_old(df_input , model ,preprocesor):
+    with st.status("Creating simulations.."):
+        # Encode categorical features
+        for i in df_input.columns.tolist():
+            if i in list(INPUT_FEATURES.keys()):
+                df_input[i] = df_input[i].map(INPUT_FEATURES[i])
+        print('Features encoded')
+        # Put clinic number ad hoc
+        df_input['data_group_encoded'] = 8
+        # Define range of operation time in minutes and Fluid sum in mL to simulate
+        range_operation_time = list(range(MINIMUM_OPERATION_TIME , MAXIMUM_OPERATION_TIME + 5, 1))
+        range_fluid_sum = list(range(MINIMUM_FLUID_SUM , MAXIMUM_FLUID_SUM + 100 , 10))
+        
+        # Make 3D surface
+        combinations = list(product(range_operation_time, range_fluid_sum))
+        df_combinations = pd.DataFrame(combinations, columns=[ 'Operation time (min)', 'Fluid_sum'])
+        
+        df_repeated = pd.concat([df_input] * df_combinations.shape[0], ignore_index=True)
+        
+        # Concat df
+        df_combinations = pd.concat([df_combinations.reset_index(drop = True),
+                                     df_repeated.reset_index(drop = True)] , axis = 1)
+        print(f"df_combinations:{df_combinations}")
     
     # Predict
-    model.eval()
-    with torch.no_grad():
-        test_f1 = torch.tensor(df_combinations['Fluid_sum'].values).float().view(-1, 1)
-        test_f2 = torch.tensor(df_combinations['Operation time (min)'].values).float().view(-1, 1)
-        test_other = torch.tensor(df_combinations.drop(columns = ['Fluid_sum' , 'Operation time (min)']).values).float()
+    with st.status("Making Surface Plot.."):
+        model.eval()
+        with torch.no_grad():
+            test_f1 = torch.tensor(df_combinations['Fluid_sum'].values).float().view(-1, 1)
+            test_f2 = torch.tensor(df_combinations['Operation time (min)'].values).float().view(-1, 1)
+            test_other = torch.tensor(df_combinations.drop(columns = ['Fluid_sum' , 'Operation time (min)']).values).float()
 
         test_output = model(test_f1, test_f2, test_other).squeeze()
     df_combinations['pred_proba'] = test_output.detach().numpy() * 100
@@ -362,6 +294,119 @@ def parser_input(df_input , model ,preprocesor ,  initial_operation_time , initi
     
     return None
 
+def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -> None:
+    """
+    Parse input data, generate predictions, and create a 3D surface plot of anastomotic leakage risk.
+    
+    Args:
+        df_input: Input DataFrame containing patient data
+        model: PyTorch model for predictions
+        preprocessor: Data preprocessor (currently unused)
+    
+    Returns:
+        None - Displays plot and statistics via Streamlit
+    """
+    def prepare_data():
+        # Create copy to avoid modifying original
+        df = df_input.copy()
+        
+        # Encode categorical features
+        for col in df.columns:
+            if col in INPUT_FEATURES:
+                df[col] = df[col].map(INPUT_FEATURES[col])
+        
+        df['data_group_encoded'] = 8
+        return df
+    
+    def generate_combinations(df: pd.DataFrame) -> pd.DataFrame:
+        # Generate range combinations
+        time_range = np.arange(MINIMUM_OPERATION_TIME, 
+                             MAXIMUM_OPERATION_TIME + 5, 
+                             1)
+        fluid_range = np.arange(MINIMUM_FLUID_SUM, 
+                              MAXIMUM_FLUID_SUM + 100, 
+                              100)
+        
+        combinations = list(product(time_range, fluid_range))
+        df_combinations = pd.DataFrame(combinations, 
+                                     columns=['Operation time (min)', 'Fluid_sum'])
+        
+        # Repeat input data for each combination
+        df_repeated = pd.concat([df] * len(combinations), ignore_index=True)
+        return pd.concat([df_combinations, df_repeated], axis=1)
+    
+    def make_predictions(df: pd.DataFrame) -> np.ndarray:
+        model.eval()
+        with torch.no_grad():
+            test_f1 = torch.tensor(df['Fluid_sum'].values, dtype=torch.float32).view(-1, 1)
+            test_f2 = torch.tensor(df['Operation time (min)'].values, dtype=torch.float32).view(-1, 1)
+            test_other = torch.tensor(
+                df.drop(columns=['Fluid_sum', 'Operation time (min)']).values, 
+                dtype=torch.float32
+            )
+            predictions = model(test_f1, test_f2, test_other).squeeze()
+        return predictions.numpy() * 100
+    
+    def create_surface_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
+        fig = plt.figure(figsize=(10, 7))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Create pivot table for surface plot
+        pivot_table = df_plot.pivot_table(
+            index='Operation time (min)', 
+            columns='Fluid_sum', 
+            values='pred_proba'
+        )
+        
+        X_mesh, Y_mesh = np.meshgrid(pivot_table.columns.values, 
+                                    pivot_table.index.values)
+        
+        # Plot surface
+        surf = ax.plot_surface(X_mesh, Y_mesh, pivot_table.values, 
+                             cmap=cm.coolwarm)
+        fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
+        
+        # Plot minimum point
+        ax.scatter(min_point['time'], min_point['fluid'], min_point['risk'],
+                  color='red', s=50,
+                  label=f"Min (Time={min_point['time']:.2f}, "
+                        f"Fluid={min_point['fluid']:.2f}, "
+                        f"Risk={min_point['risk']:.2f})")
+        
+        # Set labels and title
+        ax.set_ylabel('Operation time (min)')
+        ax.set_xlabel('Fluid_sum')
+        ax.set_zlabel('Risk of Anastomotic Leakage')
+        ax.set_title('Predicted Anastomotic Leakage based on Surgery Time and Fluid Volume')
+        ax.legend()
+        
+        st.pyplot(fig)
+    
+    with st.status("Processing data..."):
+        df_processed = prepare_data()
+        df_combinations = generate_combinations(df_processed)
+        st.write(f"**{df_combinations.shape[0]:,.0f} Combinations Generated**")
+    
+    with st.status("Generating predictions..."):
+        df_combinations['pred_proba'] = make_predictions(df_combinations)
+        
+        # Extract plot data
+        df_plot = df_combinations[['Operation time (min)', 'Fluid_sum', 'pred_proba']]
+        min_row = df_plot.loc[df_plot['pred_proba'].idxmin()]
+        
+        min_point = {
+            'time': min_row['Operation time (min)'],
+            'fluid': min_row['Fluid_sum'],
+            'risk': min_row['pred_proba']
+        }
+    
+    with st.status("Creating visualization..."):
+        create_surface_plot(df_plot, min_point)
+        
+        st.write(f"The minimum AL Likelihood is **{min_point['risk']:.2f}**, "
+                f"which occurs with Operation Time = **{min_point['time']:.0f}** "
+                f"and Fluid Volume = **{min_point['fluid']:.0f}**")
+
 ###############################################################################
 # Page configuration
 st.set_page_config(
@@ -403,8 +448,7 @@ if selected == 'Prediction':
     st.subheader("To predict Anastomotic Leackage, you need to follow the steps below:")
     st.markdown("""
     1. Enter clinical parameters of patient on the left side bar.
-    2. Enter initial values for operation time and fluid volumen.
-    3. Press the "Predict" button and wait for the result.
+    2. Press the "Predict" button and wait for the result.
     """)
     st.markdown("""
     This model predicts the probabilities of AL for simulated values of operation time and fluid volumen.
@@ -449,9 +493,9 @@ if selected == 'Prediction':
     
     
     # Add subheader for initial operation time and fluid volumen
-    st.subheader("Initial Inputs for Fluid Volumen and Surgery Duration: ")
-    operation_time = st.slider("Surgery Duration:" , min_value = 100.0, max_value = 600.0, step = 5.0)
-    fluid_sum = st.slider("Fluid Volumen:" , min_value = 600.0, max_value = 200.0, step = 10.0)
+    #st.subheader("Initial Inputs for Fluid Volumen and Surgery Duration: ")
+    #operation_time = st.slider("Surgery Duration:" , min_value = 100.0, max_value = 600.0, step = 5.0)
+    #fluid_sum = st.slider("Fluid Volumen:" , min_value = 600.0, max_value = 200.0, step = 10.0)
     
     # Create df input
     df_input = pd.DataFrame({'Age (Years)' : [age],
@@ -488,4 +532,4 @@ if selected == 'Prediction':
     # Parser input and make predictions
     predict_button = st.button('Predict')
     if predict_button:
-        parser_input(df_input ,model , preprocesor , operation_time , fluid_sum)
+        parser_input(df_input ,model , preprocesor)
