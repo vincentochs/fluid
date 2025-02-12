@@ -206,94 +206,6 @@ def initialize_app():
     return model , preprocesor
 
 # Function to parser input
-def parser_input_old(df_input , model ,preprocesor):
-    with st.status("Creating simulations.."):
-        # Encode categorical features
-        for i in df_input.columns.tolist():
-            if i in list(INPUT_FEATURES.keys()):
-                df_input[i] = df_input[i].map(INPUT_FEATURES[i])
-        print('Features encoded')
-        # Put clinic number ad hoc
-        df_input['data_group_encoded'] = 8
-        # Define range of operation time in minutes and Fluid sum in mL to simulate
-        range_operation_time = list(range(MINIMUM_OPERATION_TIME , MAXIMUM_OPERATION_TIME + 5, 1))
-        range_fluid_sum = list(range(MINIMUM_FLUID_SUM , MAXIMUM_FLUID_SUM + 100 , 10))
-        
-        # Make 3D surface
-        combinations = list(product(range_operation_time, range_fluid_sum))
-        df_combinations = pd.DataFrame(combinations, columns=[ 'Operation time (min)', 'Fluid_sum'])
-        
-        df_repeated = pd.concat([df_input] * df_combinations.shape[0], ignore_index=True)
-        
-        # Concat df
-        df_combinations = pd.concat([df_combinations.reset_index(drop = True),
-                                     df_repeated.reset_index(drop = True)] , axis = 1)
-        print(f"df_combinations:{df_combinations}")
-    
-    # Predict
-    with st.status("Making Surface Plot.."):
-        model.eval()
-        with torch.no_grad():
-            test_f1 = torch.tensor(df_combinations['Fluid_sum'].values).float().view(-1, 1)
-            test_f2 = torch.tensor(df_combinations['Operation time (min)'].values).float().view(-1, 1)
-            test_other = torch.tensor(df_combinations.drop(columns = ['Fluid_sum' , 'Operation time (min)']).values).float()
-
-        test_output = model(test_f1, test_f2, test_other).squeeze()
-    df_combinations['pred_proba'] = test_output.detach().numpy() * 100
-    
-    # Left only rows with pred proba between 0.2 and 0.8
-    min_prob = np.min(df_combinations['pred_proba'].values)
-    max_prob = np.max(df_combinations['pred_proba'].values)
-    print('Min prob:' , min_prob , 'Max prob:' , max_prob)
-    #df_combinations = df_combinations[(df_combinations['pred_proba'] >= 0.1)&(df_combinations['pred_proba'] <= 0.8)]
-    print('Predictions generated')
-    
-    # Extract information for plot 3D
-    df_plot = df_combinations[['Operation time (min)', 'Fluid_sum' , 'pred_proba']]
-    
-    # Find minimum risk
-    min_row = df_plot.loc[df_plot['pred_proba'].idxmin()]
-    min_X = min_row['Operation time (min)']
-    min_Y = min_row['Fluid_sum']
-    min_Z = min_row['pred_proba']
-    
-    # Create 3D plot
-    fig = plt.figure(figsize=(10, 7))
-    ax = fig.add_subplot(111, projection='3d')
-
-    # Convert columns into matrix
-    X_matrix = df_plot.pivot_table(index = 'Operation time (min)', columns = 'Fluid_sum', values =  'pred_proba').columns.values
-    Y_matrix = df_plot.pivot_table(index = 'Operation time (min)', columns = 'Fluid_sum', values =  'pred_proba').index.values
-    Z_matrix = df_plot.pivot_table(index = 'Operation time (min)', columns = 'Fluid_sum', values =  'pred_proba').values
-
-    # Crear la superficie
-    X_mesh, Y_mesh = np.meshgrid(X_matrix, Y_matrix)
-    surf = ax.plot_surface(X_mesh, Y_mesh, Z_matrix, cmap = cm.coolwarm)
-
-    # Colorbar
-    fig.colorbar(surf, ax = ax, shrink = 0.5, aspect = 5)
-    
-    # Add a point in the plot with the minimum risk
-    ax.scatter(min_X, min_Y, min_Z, color = 'red', s = 50, label = f"Mín (Operation Time = {min_X:.2f}, Fluid Volumen = {min_Y:.2f}, AL Likelihood = {min_Z:.2f})")
-    ax.legend()
-
-    # Axis labels
-    ax.set_xlabel('Operation time (min)')
-    ax.set_ylabel('Fluid_sum')
-    ax.set_zlabel('Risk of Anastomotic Leakage')
-    
-    # Title
-    ax.set_title('Predicted Anastomotic Leakage based on Surgery Time and Fluid Volumen')
-    
-    # Show Plot
-    st.pyplot(fig)
-
-    # Put a message with the minimum risk
-    message = f"The minimum AL Likelihood is **{min_Z}**, which occurs with Operation Time = **{min_X}** and Fluid Volumen = **{min_Y}**"
-    st.write(message)
-    
-    return None
-
 def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -> None:
     """
     Parse input data, generate predictions, and create a 3D surface plot of anastomotic leakage risk.
@@ -348,7 +260,8 @@ def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -
         return predictions.numpy() * 100
     
     def create_surface_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
-        fig = plt.figure(figsize=(10, 7))
+        # Create figure with more space for labels
+        fig = plt.figure(figsize=(12, 9))  # Increased figure size
         ax = fig.add_subplot(111, projection='3d')
         
         # Create pivot table for surface plot
@@ -364,28 +277,49 @@ def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -
         # Plot surface
         surf = ax.plot_surface(X_mesh, Y_mesh, pivot_table.values, 
                              cmap=cm.coolwarm)
-        fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
+        
+        # Add colorbar with adjusted position and size
+        cbar = fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5, pad=0.1)
+        cbar.set_label('Risk (%)', rotation=90, labelpad=10)
         
         # Plot minimum point
         ax.scatter(min_point['time'], min_point['fluid'], min_point['risk'],
-                  color='red', s=50,
-                  label=f"Min (Time={min_point['time']:.2f}, "
-                        f"Fluid={min_point['fluid']:.2f}, "
-                        f"Risk={min_point['risk']:.2f})")
+                  color='red', s=50)
         
-        # Set labels and title
-        ax.set_ylabel('Operation time (min)')
-        ax.set_xlabel('Fluid_sum')
-        ax.set_zlabel('Risk of Anastomotic Leakage')
-        ax.set_title('Predicted Anastomotic Leakage based on Surgery Time and Fluid Volume')
-        ax.legend()
+        # Add minimum point annotation with coordinate offset
+        text_offset = (min_point['time'] * 0.02, min_point['fluid'] * 0.02, min_point['risk'] * 0.02)
+        ax.text(min_point['time'] + text_offset[0], 
+                min_point['fluid'] + text_offset[1], 
+                min_point['risk'] + text_offset[2],
+                f"Min Risk Point\nTime={min_point['time']:.0f}\nFluid={min_point['fluid']:.0f}\nRisk={min_point['risk']:.2f}%",
+                color='black',
+                fontsize = '16',
+                horizontalalignment='left',
+                verticalalignment='bottom')
+        
+        # Set labels with increased padding
+        ax.set_xlabel('Fluid Volume (mL)', labelpad=20)
+        ax.set_ylabel('Operation Time (min)', labelpad=20)
+        ax.set_zlabel('Risk of Anastomotic Leakage (%)', labelpad=20 , fontsize = 12)
+        
+        # Adjust title position and add padding
+        ax.set_title('Predicted Anastomotic Leakage Risk\nbased on Surgery Time and Fluid Volume',
+                    pad=20)
+        
+        # Rotate the view for better label visibility
+        ax.view_init(elev=20, azim=45)
+        
+        # Adjust layout to prevent label cutoff
+        plt.tight_layout()
         
         st.pyplot(fig)
     
-    with st.status("Processing data..."):
+    with st.status("Processing data...") as status:
         df_processed = prepare_data()
         df_combinations = generate_combinations(df_processed)
-        st.write(f"**{df_combinations.shape[0]:,.0f} Combinations Generated**")
+        status.update(
+        label = f"**{df_combinations.shape[0]:,.0f} Combinations Generated**", state="complete", expanded=False
+    )
     
     with st.status("Generating predictions..."):
         df_combinations['pred_proba'] = make_predictions(df_combinations)
@@ -400,12 +334,15 @@ def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -
             'risk': min_row['pred_proba']
         }
     
-    with st.status("Creating visualization..."):
+    with st.status("Creating visualization...") as status:
         create_surface_plot(df_plot, min_point)
         
         st.write(f"The minimum AL Likelihood is **{min_point['risk']:.2f}**, "
                 f"which occurs with Operation Time = **{min_point['time']:.0f}** "
                 f"and Fluid Volume = **{min_point['fluid']:.0f}**")
+        status.update(
+        label = "Plot created", state="complete", expanded=True
+        )
 
 ###############################################################################
 # Page configuration
