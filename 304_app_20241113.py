@@ -1,694 +1,664 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Nov  1 22:10:54 2024
+Created on Sun Jan 26 21:31:05 2025
 
-@author: Vincent Ochs 
+@author: Vincent Ochs
+
+This script is used for generating an app for regression and classification
+task.
+
+Refactored on Mon Jul 28 2025 to re-introduce animation and focus on BMI.
 """
 
 ###############################################################################
-# Import libraries
+# Load libraries
 
 # App
 import streamlit as st
-from streamlit_option_menu import option_menu
+import altair as alt
+from streamlit_carousel import carousel
 
 # Utils
 import pandas as pd
 import pickle as pkl
 import numpy as np
-from itertools import product
-import joblib
-import pandas as pd, numpy as np
+import os
 import pickle
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib import cm
-from scipy.interpolate import make_interp_spline, BSpline
-import random
-from scipy.ndimage import gaussian_filter
-from scipy.interpolate import griddata
-from matplotlib import gridspec
-# Models
-from pycaret.classification import load_model
+import time
+from scipy.interpolate import make_interp_spline
 
-print('Libreries loaded')
+# Format of numbers
+print('Libraries loaded')
 
 ###############################################################################
-# PARAMETERS SECTION
-# Define operation time and fluid sume range to simulate
-MINIMUM_OPERATION_TIME = 45
-MINIMUM_FLUID_SUM = 1_000
-MAXIMUM_OPERATION_TIME = 530
-MAXIMUM_FLUID_SUM = 8_000
-
-
-# Define dictionary for model inputs names
-INPUT_FEATURES = {'Sex' : {'Male' : 1,
-                            'Female' : 2},
-                  'Smoking' : {'Yes' : 1,
-                                'No' : 0},
-                  'Alcohol Abuse' : {'<2 beverages/day' : 1,
-                                    '>= 2 beverages/day' : 2,
-                                    'No alcohol abuse' : 3,
-                                    'Unknown' : 4},
-                  'CKD Stages' : {'G1' : 1,
-                                    'G2' : 2,
-                                    'G3a' : 3,
-                                    'G3b' : 4,
-                                    'G4' : 5,
-                                    'G5' : 6},
-                  'liver_mets' : {'Yes' : 1,
-                                                                                                 'No' : 2,
-                                                                                                 'Unknown' : 3},
-                  'Neoadjuvant Therapy' : {'Yes' : 1,
-                                                           'No' : 0},
-                  'Immunosuppressive Drugs' : {'Yes' : 1,
-                                                'No' : 0,
-                                                'Unknown' : 2},
-                  'Steroid Use' : {'Yes' : 1,
-                                                                            'No' : 0,
-                                                                            'Unknown' : 2},
-                  'Preoperative NSAIDs use (1: Yes, 0: No, 2: Unknown)' : {'Yes' : 1,
-                                                                           'No' : 0,
-                                                                           'Unknown' : 2},
-                  'Blood Transfusion' : {'Yes' : 1,
-                                        'No' : 0,
-                                        'Unknown' : 2},
-                  'TNF Alpha Inhib (1=yes, 0=no)' : {'Yes' : 1,
+# Make a dictionary of categorical features
+dictionary_categorical_features = {'sex (1 = female, 2=male)' : {'Male' : 2,
+                                                                 'Female' : 1},
+                                   'prior_abdominal_surgery' :  {'Yes' : 1,
+                                                                 'No' : 0},
+                                   'hypertension' : {'Yes' : 1,
                                                      'No' : 0},
-                  'charlson_index' : {str(i) : i for i in range(17)},
-                  'Asa Score':  {'1: Healthy Person' : 1,
-                           '2: Mild Systemic disease' : 2,
-                           '3: Severe syatemic disease' : 3,
-                           '4: Severe systemic disease that is a constan threat to life' : 4,
-                           '5: Moribund person' : 5,
-                           '6: Unkonw' : 6},
-                  'Prior Abdominal Surgery' : {'Yes' : 1,
-                                    'No' : 2,
-                                    'Unknown' : 3},
-                  'Indication': {'Recurrent Diverticulitis' : 1,
-                                'Acute Diverticulitis' : 2,
-                                'Ileus/Stenosis' : 3,
-                                'Ischemia' : 4,
-                                'Tumor' : 5,
-                                'Volvulus' : 6,
-                                'Morbus crohn' : 7,
-                                'Colitis ulcerosa' : 8,
-                                'Perforation (müsste perforation = yes und emergency = yes' : 9,
-                                'Other' : 10,
-                                'Ileostoma reversal' : 11,
-                                'Colostoma reversal' : 12},
-                  'Operation' : {'Rectosigmoid resection/sigmoidectomy' : 1,
-                                 'Left hemicolectomy' : 2,
-                                 'Extended left hemicolectomy' : 3, 
-                                 'Right hemicolectomy' : 4, 
-                                 'Extended right hemicolectomy' : 5, 
-                                 'Transverse colectomy' : 6, 
-                                 'Hartmann conversion' : 7, 
-                                 'Ileocaecal resection' : 8, 
-                                 'Total colectomy' : 9, 
-                                 'High anterior resection (anastomosis higher than 12cm)' : 10, 
-                                 'Low anterior resection (anastomosis 12 cm from anal average and below)' : 11, 
-                                 'Abdominoperineal resection' : 12, 
-                                 'Adhesiolysis with small bowel resection' : 13, 
-                                 'Adhesiolysis only' : 14, 
-                                 'Hartmann resection / Colostomy' : 15, 
-                                 'Colon segment resection' : 16, 
-                                 'Small bowl resection' : 17},
-                  'Emergency Surgery' : {'Yes' : 1,
-                                        'No' : 0,
-                                        'Unknown' : 2},
-                  'Perforation' : {'Yes' : 1,
-                                    'No' : 0},
-                  'Approach' : {'1: Laparoscopic' : 1 ,
-                                        '2: Robotic' : 2 ,
-                                        '3: Open to open' : 3,
-                                        '4: Conversion to open' : 4,
-                                        '5: Conversion to laparoscopy' : 5},
-                  'Type of Anastomosis': {'Colon anastomosis' : 1,
-                                    'Colorectal anastomosis' : 2, 
-                                    'Ileocolonic anastomosis' : 3, 
-                                    'Ileorectal anastomosis' : 4, 
-                                    'Ileopouch-anal' : 5, 
-                                    'Colopouch' : 6, 
-                                    'Small intestinal anastomosis' : 7, 
-                                    'Unknown' : 8},
-                  'Anastomotic Technique' : {'1: Stapler' : 1,
-                                                                                                                                   '2: Hand-sewn' : 2,
-                                                                                                                                   '3: Stapler and Hand-sewn' : 3,
-                                                                                                                                   '4: Unknown' : 4},
-                  'Anastomotic Configuration' : {'End to End' : 1,
-                                                                                                                              'Side to End' : 2,
-                                                                                                                              'Side to Side' : 3,
-                                                                                                                              'End to Side' : 4},
-                  'Protective Stomy' : {'Ileostomy' : 1,
-                                                                                                         'Colostomy' : 2,
-                                                                                                         'No protective stomy' : 3,
-                                                                                                         'Unknown' : 4},
-                  "Surgeon's Experience" : {'Consultant' : 1,
-                                'Teaching Operation' : 2,
-                                'Unknown' : 3},
-                  'Points Nutritional Status' :  {str(i) : i for i in range(7)},
-                  'Psychosomatic / Pshychiatric Disorders' : {'Yes' : 1,
-                                                              'No' : 0}}
+                                   'hyperlipidemia' : {'Yes' : 1,
+                                                       'No' : 0},
+                                   'depression' :  {'Yes' : 1,
+                                                    'No' : 0},
+                                   'DMII_preoperative' : {'Yes' : 1,
+                                                          'No' : 0},
+                                   'antidiab_drug_preop_Oral_anticogulation' : {'Yes' : 1,
+                                                                                'No' : 0},
+                                   'antidiab_drug_preop_Insulin' : {'Yes' : 1,
+                                                                    'No' : 0},
+                                   'osas_preoperative' : {'Yes' : 1,
+                                                          'No' : 0},
+                                   'surgery' : {'Laparoscopic Sleeve Gastrectomy (LSG)' : 1,
+                                                'Laparoscopic Roux-en-Y Gastric Bypass (LRYGB)' : 2},
+                                   'normal_dmII_pattern' : {'Yes' : 1,
+                                                            'No' : 0},
+                                   'antidiab_drug_preop_no_therapy' : {'Yes' : 1,
+                                                                       'No' : 0},
+                                   'antidiab_drug_preop_glp1_analogen' : {'Yes' : 1,
+                                                                          'No' : 0},
+                                   }
 
-###############################################################################
+inverse_dictionary = {feature: {v: k for k, v in mapping.items()} 
+                      for feature, mapping in dictionary_categorical_features.items()}
+# MAE from training notebook for make confident intervals
+training_mae = 2.5
+
+##############################################################################
 # Section when the app initialize and load the required information
-#@st.cache_data() # We use this decorator so this initialization doesn't run every time the user change into the page
-def initialize_app():   
-    # Load model
-    path_model = r'models'
-    model_name = '\pipeline'
-    model = load_model(path_model + model_name)
-    print('File loaded -->' , path_model + model_name)
-    
+@st.cache_data() # We use this decorator so this initialization doesn't run every time the user change into the page
+def initialize_app():
+    # Load Regression Model
+    # IMPORTANT: Ensure your model files are in a 'models' subdirectory.
+    model_path_reg = os.path.join('models', '001_Regression_Model_App.sav')
+    with open(model_path_reg , 'rb') as export_model:
+        regression_model = pickle.load(export_model) 
+    # Load Classification Model
+    model_path_clf = os.path.join('models', '001_Classification_Model_App.sav')
+    with open(model_path_clf, 'rb') as export_model:
+        classification_model = pickle.load(export_model) 
+
     print('App Initialized correctly!')
     
-    return model
+    return regression_model, classification_model
 
-# Function to parser input
-def parser_input(df_input: pd.DataFrame, model) -> None:
+###############################################################################
+def create_animated_bmi_chart(summary_df):
     """
-    Parse input data, generate predictions, and create a 3D surface plot of anastomotic leakage risk.
-    
-    Args:
-        df_input: Input DataFrame containing patient data
-        model:  model for predictions
-    
-    Returns:
-        None - Displays plot and statistics via Streamlit
+    Creates a static Altair chart for BMI or Weight evolution.
     """
-    def prepare_data():
-        # Create copy to avoid modifying original
-        df = df_input.copy()
-        
-        # Encode categorical features
-        for col in df.columns:
-            if col in INPUT_FEATURES:
-                df[col] = df[col].map(INPUT_FEATURES[col])
-        
-        return df
+    st.subheader("Predicted BMI Evolution")
     
-    def generate_combinations(df: pd.DataFrame) -> pd.DataFrame:
-        # Generate range combinations
-        time_range = np.arange(MINIMUM_OPERATION_TIME, 
-                             MAXIMUM_OPERATION_TIME + 5, 
-                             1)
-        fluid_range = np.arange(MINIMUM_FLUID_SUM, 
-                              MAXIMUM_FLUID_SUM + 100, 
-                              100)
-        
-        combinations = list(product(time_range, fluid_range))
-        df_combinations = pd.DataFrame(combinations, 
-                                     columns=['Operation time', 'Fluid Sum'])
-        
-        # Repeat input data for each combination
-        df_repeated = pd.concat([df] * len(combinations), ignore_index=True)
-        return pd.concat([df_combinations, df_repeated], axis=1)
+
+    # Chart placeholder
+    chart_placeholder = st.empty()
     
-    def make_predictions(df: pd.DataFrame) -> np.ndarray:
-        df['Anastomotic Leackage (1: Yes, 0: No)'] = np.nan
-        df = df[model.feature_names_in_]
-        df = df.drop(columns = ['Anastomotic Leackage (1: Yes, 0: No)'])
-        predictions = model.predict_proba(df)[: , 1] * 100
-        return predictions
+    time_map = {'Pre': 0, '3m': 3, '6m': 6, '12m': 12, '18m': 18, '2y': 24, '3y': 36, '4y': 48, '5y': 60}
+    time_points_values = list(time_map.values())
     
-    def create_surface_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
-        # Create figure with more space for labels
-        gs = gridspec.GridSpec(1, 2, width_ratios=[4, 1])
-        fig = plt.figure(figsize=(12, 9))  # Increased figure size
-        # Create 3D plot in the left (main) space
-        ax = fig.add_subplot(gs[0], projection='3d')
-        
-        # Create a second subplot for the annotation
-        annotation_ax = fig.add_subplot(gs[1])
-        annotation_ax.axis('off')  # Hide axes for annotation subplot
-        
-        # Create pivot table for surface plot
-        pivot_table = df_plot.pivot_table(
-            index='Operation time', 
-            columns='Fluid Sum', 
-            values='pred_proba'
-        )
-        
-        # Get the original x, y coordinates
-        x_orig = pivot_table.columns.values
-        y_orig = pivot_table.index.values
-        
-        # Create smoother grid with more points
-        x_smooth = np.linspace(x_orig.min(), x_orig.max(), 100)
-        y_smooth = np.linspace(y_orig.min(), y_orig.max(), 100)
-        
-        # Create meshgrid for the smooth surface
-        X_mesh, Y_mesh = np.meshgrid(x_smooth, y_smooth)
-        
-        # Use scipy's griddata for interpolation
-        
-        
-        # Prepare data for interpolation
-        x_flat = np.repeat(x_orig, len(y_orig))
-        y_flat = np.tile(y_orig, len(x_orig))
-        z_flat = pivot_table.values.flatten()
-        
-        # Perform interpolation
-        Z_smooth = griddata(
-            (x_flat, y_flat), z_flat, (X_mesh, Y_mesh), 
-            method='cubic', 
-            fill_value=z_flat.mean()
-        )
-        
-        # Apply additional smoothing using gaussian filter (optional)
-        
-        Z_smooth = gaussian_filter(Z_smooth, sigma=0.01)
-        
-        # Plot smoothed surface
-        surf = ax.plot_surface(X_mesh, Y_mesh, Z_smooth, 
-                             cmap=cm.coolwarm, alpha=0.8)
-        
-        # Add colorbar with adjusted position and size
-        cbar = fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5, pad=0.1)
-        cbar.set_label('Risk (%)', rotation=90, labelpad=10)
-        
-        # Plot minimum point with a larger marker
-        ax.scatter(min_point['fluid'], min_point['time'], min_point['risk'],
-                  color='red', s=100, marker='*', label='Minimum Risk')
-        
-        # Add small annotation near the point
-        ax.text(min_point['fluid'], min_point['time'], min_point['risk'],
-                "Min", color='black', fontsize=10,
-                horizontalalignment='center',
-                verticalalignment='bottom')
-        
-        # Create an external annotation box using the dedicated subplot
-        min_risk_info = (
-            f"MINIMUM RISK POINT\n\n"
-            f"Operation Time: {min_point['time']:.0f} minutes\n\n"
-            f"Fluid Volume: {min_point['fluid']:.0f} mL\n\n"
-            f"Risk: {min_point['risk']:.2f}%"
-        )
-        
-        annotation_ax.text(0.1, 0.5, min_risk_info, 
-                         fontsize=14, 
-                         color='#D62728',  # Red color matching the point
-                         va='center',
-                         bbox=dict(boxstyle="round,pad=0.5", 
-                                   facecolor='#F9F9F9', 
-                                   edgecolor='#D62728',
-                                   alpha=0.9))
-        
-        # Set labels with increased padding
-        ax.set_xlabel('Fluid Volume (mL)', labelpad=15)
-        ax.set_ylabel('Operation Time (min)', labelpad=15)
-        ax.set_zlabel('Risk of Anastomotic Leakage (%)', labelpad=15, fontsize=12)
-        
-        # Adjust title position and add padding
-        ax.set_title('Predicted Anastomotic Leakage Risk\nbased on Surgery Time and Fluid Volume',
-                    pad=20, fontsize=16)
-        
-        # Rotate the view for better label visibility
-        ax.view_init(elev=25, azim=135)
-        
-        # Add legend
-        ax.legend(loc='upper right')
-        
-        # Adjust layout to prevent label cutoff
-        plt.tight_layout()
-        
-        st.pyplot(fig)
-        
-    def create_heatmap_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
-        """
-        Create a 2D heatmap of anastomotic leakage risk based on operation time and fluid volume.
-        
-        Args:
-            df_plot: DataFrame containing 'Operation time', 'Fluid Sum', and 'pred_proba' columns
-            min_point: Dictionary with minimum risk point information
-        
-        Returns:
-            None - Displays plot via Streamlit
-        """
-        # Create figure with subplots for heatmap and annotation
-        gs = gridspec.GridSpec(1, 2, width_ratios=[4, 1])
-        fig = plt.figure(figsize=(14, 8))
-        
-        # Main heatmap subplot
-        ax = fig.add_subplot(gs[0])
-        
-        # Annotation subplot
-        annotation_ax = fig.add_subplot(gs[1])
-        annotation_ax.axis('off')
-        
-        # Create pivot table for heatmap
-        pivot_table = df_plot.pivot_table(
-            index='Operation time', 
-            columns='Fluid Sum', 
-            values='pred_proba'
-        )
-        
-        # Create the heatmap
-        im = ax.imshow(pivot_table.values, 
-                       cmap='coolwarm', 
-                       aspect='auto',
-                       origin='lower',
-                       extent=[pivot_table.columns.min(), pivot_table.columns.max(),
-                              pivot_table.index.min(), pivot_table.index.max()])
-        
-        # Add colorbar
-        cbar = fig.colorbar(im, ax=ax, shrink=0.8, aspect=20, pad=0.02)
-        cbar.set_label('Risk of Anastomotic Leakage (%)', rotation=90, labelpad=15, fontsize=12)
-        
-        # Mark the minimum risk point
-        ax.scatter(min_point['fluid'], min_point['time'], 
-                  color='white', s=150, marker='*', 
-                  edgecolors='black', linewidth=2, 
-                  label='Minimum Risk Point', zorder=5)
-        
-        # Add text annotation near the minimum point
-        ax.annotate('MIN', 
-                    xy=(min_point['fluid'], min_point['time']),
-                    xytext=(10, 10), textcoords='offset points',
-                    color='black', fontweight='bold', fontsize=12,
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8),
-                    zorder=6)
-        
-        # Set labels and title
-        ax.set_xlabel('Fluid Volume (mL)', fontsize=14, labelpad=10)
-        ax.set_ylabel('Operation Time (minutes)', fontsize=14, labelpad=10)
-        ax.set_title('Anastomotic Leakage Risk Heatmap\n(Operation Time vs Fluid Volume)', 
-                    fontsize=16, pad=20)
-        
-        # Add grid for better readability
-        ax.grid(True, alpha=0.3, linestyle='--')
-        
-        # Add legend
-        ax.legend(loc='upper right', framealpha=0.9)
-        
-        # Format axes with better tick spacing
-        x_ticks = np.linspace(pivot_table.columns.min(), pivot_table.columns.max(), 8)
-        y_ticks = np.linspace(pivot_table.index.min(), pivot_table.index.max(), 8)
-        ax.set_xticks(x_ticks)
-        ax.set_yticks(y_ticks)
-        ax.set_xticklabels([f'{int(x)}' for x in x_ticks])
-        ax.set_yticklabels([f'{int(y)}' for y in y_ticks])
-        
-        # Create detailed annotation in the side panel
-        min_risk_info = (
-            f"MINIMUM RISK POINT\n\n"
-            f"Operation Time:\n{min_point['time']:.0f} minutes\n\n"
-            f"Fluid Volume:\n{min_point['fluid']:.0f} mL\n\n"
-            f"Risk:\n{min_point['risk']:.2f}%\n\n"
-            f"RISK ZONES:\n\n"
-            f"Low Risk\n(Blue areas)\n\n"
-            f"Moderate Risk\n(Yellow areas)\n\n"
-            f"High Risk\n(Red areas)"
-        )
-        
-        annotation_ax.text(0.05, 0.5, min_risk_info, 
-                          fontsize=12, 
-                          color='#2E2E2E',
-                          va='center', ha='left',
-                          bbox=dict(boxstyle="round,pad=0.5", 
-                                   facecolor='#F8F9FA', 
-                                   edgecolor='#DEE2E6',
-                                   alpha=0.95))
-        
-        # Adjust layout
-        plt.tight_layout()
-        
-        # Display the plot
-        st.pyplot(fig)
+    # Get BMI values and confidence intervals
+    bmi_values = summary_df['BMI'].round(2).values
+    ci_lower_values = summary_df['BMI CI Lower'].round(2).values
+    ci_upper_values = summary_df['BMI CI Upper'].round(2).values
 
-    ## Function to create the smooth heatmap (filled contour plot).
-    def create_smooth_heatmap_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
-        """
-        Creates a smooth 2D heatmap using a filled contour plot.
-        This visualization matches the style of the user's second example image.
+    # Calculate y-axis domain
+    y_min = summary_df['BMI CI Lower'].min() * 0.9
+    y_max = summary_df['BMI CI Upper'].max() * 1.1
 
-        Args:
-            df_plot (pd.DataFrame): DataFrame with 'Operation time', 'Fluid Sum', 'pred_proba'.
-            min_point (dict): Dictionary with minimum risk point info (not used in this plot).
-        """
-        fig = plt.figure(figsize=(12, 9))
-        ax = fig.add_subplot(111)
+    # Pre-calculate all smooth curves for animation
+    total_steps = 120 # Higher number for smoother animation
+    smooth_months = np.linspace(0, 60, total_steps)
+    smooth_bmi_values = make_interp_spline(time_points_values, bmi_values)(smooth_months)
+    smooth_ci_lower = make_interp_spline(time_points_values, ci_lower_values)(smooth_months)
+    smooth_ci_upper = make_interp_spline(time_points_values, ci_upper_values)(smooth_months)
 
-        # To match the example, we convert Fluid Volume from mL to L for the y-axis
-        df_plot_liters = df_plot.copy()
-        df_plot_liters['Fluid Sum'] = df_plot_liters['Fluid Sum'] / 1000.0
+    st.markdown("""
+        <div style="font-size:14px; text-align: center; margin-bottom: 10px;">
+            <span style="color:#0068c9;">■</span> Predicted BMI & 95% CI
+            &nbsp;&nbsp;&nbsp;
+            <span style="color:green;">- - -</span> Healthy BMI Target (25)
+        </div>
+        """, unsafe_allow_html=True)
 
-        # Create a pivot table. Note the axes are swapped compared to the other plots
-        # to match the example image (Time on X-axis, Fluid on Y-axis).
-        pivot_table = df_plot_liters.pivot_table(
-            index='Fluid Sum',        # This will be the Y-axis (in Liters)
-            columns='Operation time', # This will be the X-axis
-            values='pred_proba'
+    # Build animated chart
+    for i in range(1, total_steps + 1):
+        # Create data for the current animation frame
+        current_data = pd.DataFrame({
+            'Months': smooth_months[:i],
+            'BMI': smooth_bmi_values[:i],
+            'CI_Lower': smooth_ci_lower[:i],
+            'CI_Upper': smooth_ci_upper[:i]
+        })
+        
+        current_data['Months'] = current_data['Months'].round(2)
+        current_data['BMI'] = current_data['BMI'].round(2)
+        current_data['CI_Lower'] = current_data['CI_Lower'].round(2)
+        current_data['CI_Upper'] = current_data['CI_Upper'].round(2)
+
+        # Main prediction line
+        line = alt.Chart(current_data).mark_line(
+            color='#0068c9',
+            size=3
+        ).encode(
+            x=alt.X('Months', title='Postoperative Months', scale=alt.Scale(domain=[0, 60])),
+            y=alt.Y('BMI', title='Body Mass Index (BMI)', scale=alt.Scale(domain=[y_min, y_max]))
         )
 
-        # Get X, Y, and Z data for the contour plot
-        X, Y = np.meshgrid(pivot_table.columns, pivot_table.index)
-        Z = pivot_table.values
+        # Confidence interval area
+        area = alt.Chart(current_data).mark_area(
+            opacity=0.3,
+            color='#0068c9'
+        ).encode(
+            x='Months',
+            y='CI_Lower',
+            y2='CI_Upper'
+        )
+        
+        # Healthy BMI line (static)
+        healthy_bmi_line = alt.Chart(pd.DataFrame({'y': [25]})).mark_rule(color='green', strokeDash=[3,3], size=2).encode(y='y')
+        
+        # Combine charts
+        final_chart = (area + line + healthy_bmi_line).properties(
+            width=600,
+            height=400
+        ).configure_axis(
+            labelFontSize=12,
+            titleFontSize=14
+        )
 
-        # Use contourf to create a filled contour plot, which gives a smooth appearance.
-        # 'levels' determines how many color steps to show. More levels = smoother.
-        # 'plasma' is a colormap similar to the purple-to-yellow in the example.
-        contour = ax.contourf(X, Y, Z, levels=50, cmap='plasma')
+        chart_placeholder.altair_chart(final_chart, use_container_width=True)
+        time.sleep(0.01)
 
-        # Add a colorbar to show the risk scale
-        cbar = fig.colorbar(contour)
-        cbar.set_label('Leakage Risk (%)', fontsize=12, labelpad=10)
+# Parser input information
+def parser_user_input(dataframe_input, reg_model, clf_model):
+    """
+    Parses user input, runs predictions, and returns a comprehensive dataframe.
+    """
+    # Encode categorical features
+    for i in dictionary_categorical_features.keys():
+        if i in dataframe_input.columns:
+            dataframe_input[i] = dataframe_input[i].map(dictionary_categorical_features[i])
+            
+    predictions_df_regression = pd.DataFrame(reg_model.predict(dataframe_input[reg_model.feature_names_in_.tolist()]))
+    predictions_df_regression.columns = ['bmi3','bmi6','bmi12','bmi18','bmi2y','bmi3y','bmi4y','bmi5y']
+    
+    # Adjust BMI curve based on surgery effectiveness
+    surgery_name = dataframe_input['surgery'].values[0]
+    if surgery_name == 2: # LSG
+        predictions_df_regression *= 0.85
+    
+    # Classification part
+    df_classification = pd.concat([dataframe_input, predictions_df_regression], axis=1)
+    
+    _x = clf_model.predict_proba(df_classification[clf_model.feature_names_in_.tolist()])
+    _x = [value[0][1] for value in _x]
+    probas_df_classification = pd.DataFrame([_x])
+    probas_df_classification.columns = ['dm3m_prob','dm6m_prob','dm12m_prob','dm18m_prob','dm2y_prob', 'dm3y_prob','dm4y_prob','dm5y_prob']
+    
+    predictions_df_classification = (probas_df_classification > 0.5).astype(int)
+    predictions_df_classification.columns = ['dm3m','dm6m','dm12m','dm18m','dm2y','dm3y' , 'dm4y','dm5y']
 
-        # Set labels and title
-        ax.set_xlabel('Operation Time (minutes)', fontsize=14, labelpad=10)
-        ax.set_ylabel('Fluid Volume (L)', fontsize=14, labelpad=10)
-        ax.set_title('Smooth Anastomotic Leakage Risk Heatmap', fontsize=16, pad=20)
-
-        # Add a dashed grid for better readability
-        ax.grid(True, linestyle='--', alpha=0.5)
-
-        # Adjust layout and display the plot in Streamlit
-        plt.tight_layout()
-        st.pyplot(fig)
-
+    df_final = pd.concat([df_classification, predictions_df_classification, probas_df_classification], axis=1)
+    df_final['DMII_preoperative_prob'] = df_final['DMII_preoperative'].astype(float)
+    
     ###########################################################################
-    with st.status("Processing data...") as status:
-        df_processed = prepare_data()
-        df_combinations = generate_combinations(df_processed)
-        status.update(
-        label = f"**{df_combinations.shape[0]:,.0f} Combinations Generated**", state="complete", expanded=False
-    )
+    # BMI-based DM probability adjustment based on BMI variation between time steps
     
-    with st.status("Generating predictions..."):
-        df_combinations['pred_proba'] = make_predictions(df_combinations)
+    # Only apply BMI-based adjustments if patient has preoperative diabetes
+    if df_final['DMII_preoperative'].iloc[0] == 1:
         
-        print(f"Original df:\n {df_combinations.head()}")
+        # Function to calculate adjusted probability based on BMI change
+        def adjust_probability_by_bmi_change_enhanced(bmi_change, current_prob, current_bmi, surgery_type, 
+                                                  time_step, medications, base_adjustment=0.05):
+            """
+            Enhanced function to adjust DM probability based on BMI change, surgery type, and medications
+            
+            Parameters:
+            - bmi_change: Change in BMI (negative = reduction, positive = increase)
+            - current_prob: Current DM probability
+            - current_bmi: Current BMI value
+            - surgery_type: Type of surgery (1=LSG, 2=LRYGB, 5=OAGB)
+            - time_step: Time step identifier
+            - medications: Dictionary with medication flags
+            - base_adjustment: Base adjustment factor per BMI unit change
+            """
+            
+            # Surgery-specific BMI thresholds based on your table
+            # Using the "Lite threshold BMI" values from your image
+            surgery_thresholds = {
+                # LSG (Laparoscopic Sleeve Gastrectomy) - surgery type 1
+                1: {
+                    '3m': 35.0,   # 3 months
+                    '6m': 32.0,   # 6 months  
+                    '12m': 30.0,  # 12 months
+                    '18m': 28.0,  # 18 months
+                    '2y': 27.0,   # 2 years
+                    '3y': 26.0,   # 3 years
+                    '4y': 25.0,   # 4 years
+                    '5y': 25.0    # 5 years
+                },
+                # LRYGB (Laparoscopic Roux-en-Y Gastric Bypass) - surgery type 2
+                2: {
+                    '3m': 33.0,   # Typically more aggressive weight loss
+                    '6m': 30.0,   
+                    '12m': 28.0,  
+                    '18m': 26.0,  
+                    '2y': 25.0,   
+                    '3y': 24.0,   
+                    '4y': 23.0,   
+                    '5y': 23.0    
+                },
+                # OAGB (One Anastomosis Gastric Bypass) - surgery type 5
+                5: {
+                    '3m': 34.0,   # Between LSG and LRYGB
+                    '6m': 31.0,   
+                    '12m': 29.0,  
+                    '18m': 27.0,  
+                    '2y': 26.0,   
+                    '3y': 25.0,   
+                    '4y': 24.0,   
+                    '5y': 24.0    
+                }
+            }
+            
+            # Time step mapping
+            time_step_map = {
+                'dm3m_prob': '3m',
+                'dm6m_prob': '6m', 
+                'dm12m_prob': '12m',
+                'dm18m_prob': '18m',
+                'dm2y_prob': '2y',
+                'dm3y_prob': '3y',
+                'dm4y_prob': '4y',
+                'dm5y_prob': '5y'
+            }
+            
+            # Get the appropriate threshold for this surgery and time step
+            surgery_key = surgery_type if surgery_type in surgery_thresholds else 1  # Default to LSG
+            time_key = time_step_map.get(time_step, '3m')  # Default to 3m if not found
+            threshold_bmi = surgery_thresholds[surgery_key].get(time_key, 30.0)  # Default threshold
+            
+            # Calculate BMI-based adjustment
+            if current_bmi <= threshold_bmi:
+                # BMI is below threshold - higher chance of remission (lower DM probability)
+                bmi_difference = threshold_bmi - current_bmi
+                # Surgery-specific effectiveness multiplier
+                if surgery_type == 2:  # LRYGB - most effective
+                    effectiveness_multiplier = 2.5
+                elif surgery_type == 5:  # OAGB - moderately effective  
+                    effectiveness_multiplier = 1.15
+                else:  # LSG - baseline effectiveness
+                    effectiveness_multiplier = 1.30
+                    
+                # The more below the threshold, the greater the reduction
+                reduction_factor = min(base_adjustment * (1 + bmi_difference / 10) * effectiveness_multiplier, 0.8)
+                bmi_adjusted_prob = current_prob * (1 - reduction_factor)
+            else:
+                # BMI is above threshold - lower chance of remission (higher DM probability)
+                bmi_difference = current_bmi - threshold_bmi
+                # The more above the threshold, the smaller the reduction (or even increase)
+                increase_factor = min(base_adjustment * (bmi_difference / 10), 0.3)
+                bmi_adjusted_prob = current_prob * (1 + increase_factor)
+            
+            # Apply medication effects (medications reduce DM probability)
+            medication_reduction = 0.0
+            
+            # GLP-1 analogs - strong effect on diabetes remission
+            if medications.get('antidiab_drug_preop_glp1_analogen', 0) == 1:
+                medication_reduction += 0.15  # 15% reduction
+            
+            # Oral antidiabetic drugs - moderate effect
+            if medications.get('antidiab_drug_preop_Oral_anticogulation', 0) == 1:
+                medication_reduction += 0.10  # 10% reduction
+                
+            # Insulin - indicates more severe diabetes, but still some protective effect
+            if medications.get('antidiab_drug_preop_Insulin', 0) == 1:
+                medication_reduction += 0.08  # 8% reduction
+            
+            # No therapy - no additional benefit
+            if medications.get('antidiab_drug_preop_no_therapy', 0) == 1:
+                medication_reduction += 0.0  # No additional reduction
+            
+            # Apply medication reduction
+            final_adjusted_prob = bmi_adjusted_prob * (1 - medication_reduction)
+            
+            # Ensure probability stays within [0, 1] bounds
+            final_adjusted_prob = max(0.0, min(1.0, final_adjusted_prob))
+            
+            return final_adjusted_prob
         
-        # Create manual restrictions based on:
-        #for fluid
-        #Normal: 2000–3500 mL
-        #High Risk Zone: > 4000–4500 mL
-        
-        #Normal: 90–180 minutes
-        #Moderate Risk: 180–240 minutes
-        #High Risk Zone: > 240 minutes (4+ hours)
-        
-        #for operation time
-        
-        df_combinations['pred_proba'] = np.select(condlist = [(df_combinations['Fluid Sum'] > 2_000)&(df_combinations['Fluid Sum'] <= 3_500),
-                                                              (df_combinations['Fluid Sum'] > 3_500)&(df_combinations['Fluid Sum'] <= 4_500),
-                                                              df_combinations['Fluid Sum'] > 4_500,
-                                                              df_combinations['Fluid Sum'] >= 1000],
-                                                  choicelist = [df_combinations['pred_proba'] - random.random() * 100 * 0.5,
-                                                                df_combinations['pred_proba'] + random.random() * 100 * 0.25,
-                                                                df_combinations['pred_proba'] + random.random() * 100 * 0.5,
-                                                                df_combinations['pred_proba'] + random.random() * 100 * 0.8],
-                                                  default = df_combinations['pred_proba'])
-        
-        print(f"After fluid df:\n {df_combinations.head()}")
-        
-        df_combinations['pred_proba'] = np.select(condlist = [(df_combinations['Operation time'] > 90)&(df_combinations['Operation time'] <= 180),
-                                                              (df_combinations['Operation time'] > 180)&(df_combinations['Operation time'] <= 240),
-                                                              df_combinations['Operation time'] > 240,
-                                                              df_combinations['Operation time'] >= 45],
-                                                  choicelist = [df_combinations['pred_proba'] - random.random() * 100 * 0.5,
-                                                                df_combinations['pred_proba'] + random.random() * 100 * 0.25,
-                                                                df_combinations['pred_proba'] + random.random() * 100 * 0.5,
-                                                                df_combinations['pred_proba'] + random.random() * 100 * 1.0],
-                                                  default = df_combinations['pred_proba'])
-        
-        print(f"After time df:\n {df_combinations.head()}")
-        
-        # Ensure the probs are in range 0 to 100
-        df_combinations['pred_proba'] = np.select(condlist = [df_combinations['pred_proba'] > 100.0,
-                                                              df_combinations['pred_proba'] < 0.0],
-                                                  choicelist = [100.0,
-                                                                0.0],
-                                                  default = df_combinations['pred_proba'])
-        print(f"After range adjustment df:\n {df_combinations.head()}")
-        
-        # Extract plot data
-        df_plot = df_combinations[['Operation time', 'Fluid Sum', 'pred_proba']]
-        min_row = df_plot.loc[df_plot['pred_proba'].idxmin()]
-        
-        min_point = {
-            'time': min_row['Operation time'],
-            'fluid': min_row['Fluid Sum'],
-            'risk': min_row['pred_proba']
-        }
+        # Apply BMI change-based adjustments to each time step
+        def apply_enhanced_bmi_adjustments(df_final, clf_model):
+            """
+            Apply enhanced BMI adjustments with surgery-specific thresholds and medication effects
+            """
+            # Define BMI time step transitions
+            bmi_transitions = [
+                {'prev_bmi': 'BMI before surgery', 'current_bmi': 'bmi3', 'prob_col': 'dm3m_prob'},
+                {'prev_bmi': 'bmi3', 'current_bmi': 'bmi6', 'prob_col': 'dm6m_prob'},
+                {'prev_bmi': 'bmi6', 'current_bmi': 'bmi12', 'prob_col': 'dm12m_prob'},
+                {'prev_bmi': 'bmi12', 'current_bmi': 'bmi18', 'prob_col': 'dm18m_prob'},
+                {'prev_bmi': 'bmi18', 'current_bmi': 'bmi2y', 'prob_col': 'dm2y_prob'},
+                {'prev_bmi': 'bmi2y', 'current_bmi': 'bmi3y', 'prob_col': 'dm3y_prob'},
+                {'prev_bmi': 'bmi3y', 'current_bmi': 'bmi4y', 'prob_col': 'dm4y_prob'},
+                {'prev_bmi': 'bmi4y', 'current_bmi': 'bmi5y', 'prob_col': 'dm5y_prob'}
+            ]
+            
+            # Only apply BMI-based adjustments if patient has preoperative diabetes
+            if df_final['DMII_preoperative'].iloc[0] == 1:
+                
+                # Get surgery type and medications
+                surgery_type = df_final['surgery'].iloc[0]
+                medications = {
+                    'antidiab_drug_preop_glp1_analogen': df_final['antidiab_drug_preop_glp1_analogen'].iloc[0],
+                    'antidiab_drug_preop_Oral_anticogulation': df_final['antidiab_drug_preop_Oral_anticogulation'].iloc[0],
+                    'antidiab_drug_preop_Insulin': df_final['antidiab_drug_preop_Insulin'].iloc[0],
+                    'antidiab_drug_preop_no_therapy': df_final['antidiab_drug_preop_no_therapy'].iloc[0]
+                }
+                
+                # Apply enhanced BMI change-based adjustments to each time step
+                for transition in bmi_transitions:
+                    prev_bmi_col = transition['prev_bmi']
+                    current_bmi_col = transition['current_bmi']
+                    prob_col = transition['prob_col']
+                    
+                    prev_bmi = df_final[prev_bmi_col].iloc[0]
+                    current_bmi = df_final[current_bmi_col].iloc[0]
+                    current_prob = df_final[prob_col].iloc[0]
+                    
+                    # Calculate BMI change
+                    bmi_change = current_bmi - prev_bmi
+                    
+                    # Calculate adjusted probability using enhanced function
+                    adjusted_prob = adjust_probability_by_bmi_change_enhanced(
+                        bmi_change=bmi_change,
+                        current_prob=current_prob, 
+                        current_bmi=current_bmi,
+                        surgery_type=surgery_type,
+                        time_step=prob_col,
+                        medications=medications
+                    )
+                    
+                    # Apply comorbidity adjustments (hypertension and hyperlipidemia)
+                    comorbidity_factor = 1.0
+                    
+                    # Hypertension increases DM probability by 10-15%
+                    if df_final['hypertension'].iloc[0] == 1:
+                        comorbidity_factor *= 1.35
+                    
+                    # Hyperlipidemia increases DM probability by 8-12%
+                    if df_final['hyperlipidemia'].iloc[0] == 1:
+                        comorbidity_factor *= 1.20
+                    # OSAS increase DM probability by 10%
+                    if df_final['osas_preoperative'].iloc[0] == 1:
+                        comorbidity_factor *= 1.10
+                    
+                    # Apply comorbidity factor
+                    final_adjusted_prob = min(1.0, adjusted_prob * comorbidity_factor)
+                    
+                    # Update the probability in the dataframe
+                    df_final[prob_col] = final_adjusted_prob
+                    
+                    # Also update the binary prediction based on adjusted probability
+                    binary_col = prob_col.replace('_prob', '')
+                    df_final[binary_col] = 1 if final_adjusted_prob > 0.5 else 0
+                    
+                    # Get surgery name for logging
+                    surgery_names = {1: 'LSG', 2: 'LRYGB', 5: 'OAGB'}
+                    surgery_name = surgery_names.get(surgery_type, 'Unknown')
+                    
+                    print(f"Transition {prev_bmi_col} -> {current_bmi_col}: "
+                          f"Surgery={surgery_name}, BMI={current_bmi:.1f}, BMI change={bmi_change:.1f}, "
+                          f"Original prob={current_prob:.3f}, "
+                          f"Adjusted prob={adjusted_prob:.3f}, "
+                          f"Final prob (with comorbidities)={final_adjusted_prob:.3f}")
+            
+            return df_final
+        df_final = apply_enhanced_bmi_adjustments(df_final, clf_model)
     
-    with st.status("Creating visualizations...") as status:
-       
-        #tab1, tab2, tab3 = st.tabs(["3D Surface Plot", "2D Heatmap", "Smooth 2D Heatmap"])
-        #with tab1:
-        #    st.subheader("3D Surface Visualization")
-        #    create_surface_plot(df_plot, min_point)
+    # Confidence interval creation
+    bmi_columns = ['BMI before surgery', 'bmi3', 'bmi6', 'bmi12', 'bmi18', 'bmi2y', 'bmi3y', 'bmi4y', 'bmi5y']
+
+    for col in bmi_columns:
+        df_final[f'{col}_ci_lower'] = df_final[col] - training_mae
+        df_final[f'{col}_ci_upper'] = df_final[col] + training_mae
         
-        #with tab2:
-        #    st.subheader("2D Heatmap Visualization")
-        #    create_heatmap_plot(df_plot, min_point)
-        
-        ## Added a third tab and called the new plotting function.
-        #with tab3:
-        #    st.subheader("2D Heatmap Visualization")
-        #    create_smooth_heatmap_plot(df_plot, min_point)
-        st.subheader("2D Heatmap Visualization")
-        create_smooth_heatmap_plot(df_plot, min_point)
-        # Show minimum risk information (this appears below all tabs)
-        st.info(
-            f"**Optimal Parameters:** The minimum AL likelihood is **{min_point['risk']:.2f}%**, "
-            f"which occurs with Operation Time = **{min_point['time']:.0f} minutes** "
-            f"and Fluid Volume = **{min_point['fluid']:.0f} mL**"
-        )
-        
-        status.update(
-            label="All visualizations created successfully", 
-            state="complete", 
-            expanded=True
-        )
+    # Create a clean summary dataframe
+    summary_df = pd.DataFrame({'Time': ['Pre', '3m', '6m', '12m', '18m', '2y', '3y', '4y', '5y']})
+    summary_df['BMI'] = df_final[bmi_columns].iloc[0].values
+    summary_df['BMI CI Lower'] = df_final[[f'{c}_ci_lower' for c in bmi_columns]].iloc[0].values
+    summary_df['BMI CI Upper'] = df_final[[f'{c}_ci_upper' for c in bmi_columns]].iloc[0].values
+    
+    # Add Diabetes data
+    dm_status_cols = ['DMII_preoperative', 'dm3m', 'dm6m', 'dm12m', 'dm18m', 'dm2y', 'dm3y', 'dm4y', 'dm5y']
+    dm_prob_cols = ['DMII_preoperative_prob', 'dm3m_prob', 'dm6m_prob', 'dm12m_prob', 'dm18m_prob', 'dm2y_prob', 'dm3y_prob', 'dm4y_prob', 'dm5y_prob']
+    summary_df['DM Status'] = np.where(df_final[dm_status_cols].iloc[0].values == 1, 'Diabetes', 'Remission')
+    summary_df['DM Likelihood (%)'] = (df_final[dm_prob_cols].iloc[0].values * 100).round(1)
+
+    return summary_df
 
 ###############################################################################
 # Page configuration
 st.set_page_config(
-    page_title="AL Prediction App"
+    page_title="DM Predictor",
+    layout='wide'
 )
-st.set_option('deprecation.showPyplotGlobalUse', False)
-# Initialize app
-model = initialize_app()
 
-# Option Menu configuration
-with st.sidebar:
-    selected = option_menu(
-        menu_title = 'Main Menu',
-        options = ['Home' , 'Prediction'],
-        icons = ['house' , 'book'],
-        menu_icon = 'cast',
-        default_index = 0,
-        orientation = 'Vertical')
-    
-######################
-# Home page layout
-######################
-if selected == 'Home':
-    st.title('Anastomotic Leackage App')
-    st.markdown("""
-    This app contains 2 sections which you can access from the horizontal menu above.\n
-    The sections are:\n
-    Home: The main page of the app.\n
-    **Prediction:** On this section you can select the patients information and
-    the models iterate over all posible operation time and fluid volumen for suggesting
-    the best option.\n
-    """)
-    
-###############################################################################
-# Prediction page layout
-if selected == 'Prediction':
-    st.title('Prediction Section')
-    st.subheader("Description")
-    st.subheader("To predict Anastomotic Leackage, you need to follow the steps below:")
-    st.markdown("""
-    1. Enter clinical parameters of patient on the left side bar.
-    2. Press the "Predict" button and wait for the result.
-    """)
-    st.markdown("""
-    This model predicts the probabilities of AL for simulated values of operation time and fluid volumen.
-    """)
-    
-    # Sidebar layout
-    st.sidebar.title("Patiens Info")
-    st.sidebar.subheader("Please choose parameters")
-    
-    # Input features
-    age = st.sidebar.slider("Age:", min_value = 18, max_value = 100,step = 1)
-    bmi = st.sidebar.slider("Preoperative BMI:", min_value = 18, max_value = 50,step = 1)
-    preoperative_hemoglobin_level = st.sidebar.slider("Preoperative Hemoglobin Level:", min_value = 0.0, max_value = 30.0,step = 0.1)
-    preoperative_leukocyte_count_level = st.sidebar.slider("Preoperative Leukocyte Count:", min_value = 0.0, max_value = 30.0,step = 0.1)
-    #preoperative_albumin_level = st.sidebar.slider("Preoperative Albumin Level:", min_value = 0.0, max_value = 30.0,step = 0.1)
-    #preoperative_crp_level = st.sidebar.slider("Preoperative CRP Level:", min_value = 0.0, max_value = 100.0,step = 0.1)
-    sex = st.sidebar.selectbox('Gender', tuple(INPUT_FEATURES['Sex'].keys()))
-    active_smoking = st.sidebar.selectbox('Active Smoking', tuple(INPUT_FEATURES['Smoking'].keys()))
-    alcohol_abuse = st.sidebar.selectbox('Alcohol Abuse', tuple(INPUT_FEATURES['Alcohol Abuse'].keys()))
-    renal_function = st.sidebar.selectbox('Renal Function CKD Stages', tuple(INPUT_FEATURES['CKD Stages'].keys()))
-    #liver_metastasis = st.sidebar.selectbox('Liver Metastasis', tuple(INPUT_FEATURES['liver_mets'].keys()))
-    neoadjuvant_therapy = st.sidebar.selectbox('Neoadjuvant Therapy', tuple(INPUT_FEATURES['Neoadjuvant Therapy'].keys()))
-    preoperative_use_immunodepressive_drugs = st.sidebar.selectbox('Use of Immunodepressive Drugs', tuple(INPUT_FEATURES['Immunosuppressive Drugs'].keys()))
-    preoperative_steroid_use = st.sidebar.selectbox('Steroid Use', tuple(INPUT_FEATURES['Steroid Use'].keys()))
-    #preoperative_nsaids_use = st.sidebar.selectbox('NSAIDs Use', tuple(INPUT_FEATURES['Preoperative NSAIDs use (1: Yes, 0: No, 2: Unknown)'].keys()))
-    preoperative_blood_transfusion = st.sidebar.selectbox('Preoperative Blood Transfusion', tuple(INPUT_FEATURES['Blood Transfusion'].keys()))
-    #tnf_alpha = st.sidebar.selectbox('TNF Alpha', tuple(INPUT_FEATURES['TNF Alpha Inhib (1=yes, 0=no)'].keys()))
-    #cci = st.sidebar.selectbox('Charlson Comorbility Index', tuple(INPUT_FEATURES['charlson_index'].keys()))
-    asa_score = st.sidebar.selectbox('ASA Score', tuple(INPUT_FEATURES['Asa Score'].keys()))
-    prior_abdominal_surgery = st.sidebar.selectbox('Prior abdominal surgery', tuple(INPUT_FEATURES['Prior Abdominal Surgery'].keys()))
-    indication = st.sidebar.selectbox('Indication', tuple(INPUT_FEATURES['Indication'].keys()))
-    operation_type = st.sidebar.selectbox('Operation', tuple(INPUT_FEATURES['Operation'].keys())) 
-    emergency_surgery = st.sidebar.selectbox('Emergency Surgery', tuple(INPUT_FEATURES['Emergency Surgery'].keys()))
-    perforation = st.sidebar.selectbox('Perforation', tuple(INPUT_FEATURES['Perforation'].keys()))
-    approach = st.sidebar.selectbox('Approach', tuple(INPUT_FEATURES['Approach'].keys()))
-    type_of_anastomosis = st.sidebar.selectbox('Type of Anastomosis', tuple(INPUT_FEATURES['Type of Anastomosis'].keys()))
-    anastomotic_technique = st.sidebar.selectbox('Anastomotic Technique', tuple(INPUT_FEATURES['Anastomotic Technique'].keys()))
-    anastomotic_configuration = st.sidebar.selectbox('Anastomotic Configuration', tuple(INPUT_FEATURES['Anastomotic Configuration'].keys())) 
-    protective_stomy = st.sidebar.selectbox('Protective Stomy', tuple(INPUT_FEATURES['Protective Stomy'].keys()))
-    surgeon_experience = st.sidebar.selectbox('Surgeon Experience', tuple(INPUT_FEATURES["Surgeon's Experience"].keys()))
-    total_points_nutritional_status = st.sidebar.selectbox('Points Nutritional Status', tuple(INPUT_FEATURES['Points Nutritional Status'].keys())) 
-    #psychosomatic = st.sidebar.selectbox('Psychosomatic / Pshychiatric Disorders', tuple(INPUT_FEATURES['Psychosomatic / Pshychiatric Disorders'].keys())) 
-    
-    
-    # Add subheader for initial operation time and fluid volumen
-    #st.subheader("Initial Inputs for Fluid Volumen and Surgery Duration: ")
-    #operation_time = st.slider("Surgery Duration:" , min_value = 100.0, max_value = 600.0, step = 5.0)
-    #fluid_sum = st.slider("Fluid Volumen:" , min_value = 600.0, max_value = 200.0, step = 10.0)
-    
-    # Create df input
-    df_input = pd.DataFrame({'Age' : [age],
-                             'BMI' : [bmi],
-                             'Hemoglobin' : [preoperative_hemoglobin_level],
-                             'Leukocyte Count' : [preoperative_leukocyte_count_level],
-                             #'alb_lvl' : [preoperative_albumin_level],
-                             #'crp_lvl' : [preoperative_crp_level],
-                             'Sex' : [sex],
-                             'Smoking' : [active_smoking],
-                             'Alcohol Abuse' : [alcohol_abuse],
-                             'CKD Stages' :[renal_function],
-                             #'liver_mets' : [liver_metastasis],
-                             'Neoadjuvant Therapy' : [neoadjuvant_therapy],
-                             'Immunosuppressive Drugs' : [preoperative_use_immunodepressive_drugs],
-                             'Steroid Use' : [preoperative_steroid_use],
-                             #'Preoperative NSAIDs use (1: Yes, 0: No, 2: Unknown)' : [preoperative_nsaids_use],
-                             'Blood Transfusion' : [preoperative_blood_transfusion],
-                             #'TNF Alpha Inhib (1=yes, 0=no)' : [tnf_alpha],
-                             #'charlson_index' : [cci],
-                             'Asa Score' : [asa_score],
-                             'Prior Abdominal Surgery' : [prior_abdominal_surgery],
-                             'Indication' : [indication],
-                             'Operation' : [operation_type],
-                             'Emergency Surgery' : [emergency_surgery],
-                             'Perforation' : [perforation],
-                             'Approach' : [approach],
-                             'Type of Anastomosis' : [type_of_anastomosis],
-                             'Anastomotic Technique' : [anastomotic_technique],
-                             'Anastomotic Configuration' : [anastomotic_configuration],
-                             'Protective Stomy' : [protective_stomy],
-                             "Surgeon's Experience" : [surgeon_experience],
-                             'Points Nutritional Status' : [total_points_nutritional_status]})
-                             #'Psychosomatic / Pshychiatric Disorders' : [psychosomatic]})
-    # Parser input and make predictions
-    predict_button = st.button('Predict')
+# Load Models
+reg_model, clf_model = initialize_app()
+
+# --- HEADER ---
+st.title("Diabetes Mellitus (DM) Predictor")
+st.markdown("This app let you select the patients information and the model is going to predict the BMI evolution of the patient and it's DM probability remission.")
+st.markdown("---")
+
+# --- LAYOUT ---
+input_col, output_col = st.columns((1, 1.5))
+
+# --- INPUT COLUMN ---
+with input_col:
+    st.header("Patient Information")
+
+    st.subheader("Patient Data")
+    age = st.slider("Age (Years):", min_value=18, max_value=80, value=45, step=1)
+    bmi_pre = st.slider("Preoperative BMI:", min_value=30.0, max_value=70.0, value=42.0, step=0.1)
+    sex = st.radio("Sex:", options=['Female', 'Male'], horizontal=True)
+
+    st.subheader("Medical Conditions")
+    hypertension = st.checkbox("Hypertension")
+    hyperlipidemia = st.checkbox('Hyperlipidemia')
+    osas_preoperative = st.checkbox('Obstructive Sleep Apnea (OSAS)')
+    DMII_preoperative = st.checkbox('Type 2 Diabetes (T2DM)')
+
+    antidiab_drug_preop_no_therapy = 0
+    antidiab_drug_preop_glp1_analogen = 0
+    antidiab_drug_preop_Oral_anticogulation = 0
+    antidiab_drug_preop_Insulin = 0
+
+    if DMII_preoperative:
+        st.write("Preoperative T2DM Treatment:")
+        antidiab_drug_preop_no_therapy = st.checkbox('No Therapy')
+        antidiab_drug_preop_glp1_analogen = st.checkbox('GLP-1 Analog')
+        antidiab_drug_preop_Oral_anticogulation = st.checkbox('Oral Antidiabetic Drug')
+        antidiab_drug_preop_Insulin = st.checkbox('Insulin')
+
+    st.subheader("Planned Surgery")
+    surgery = st.radio(
+        "Select a procedure:",
+        options=list(dictionary_categorical_features['surgery'].keys())
+    )
+
+    predict_button = st.button("Compute Prediction", type="primary", use_container_width=True)
+
+
+# --- OUTPUT COLUMN ---
+with output_col:
+    st.header("Prediction Results")
+
     if predict_button:
-        parser_input(df_input ,model)
+        with st.spinner("Calculating patient's trajectory..."):
+            # Prepare input dataframe
+            input_data = {
+                'age_years': [age],
+                'BMI before surgery': [bmi_pre],
+                'sex (1 = female, 2=male)': [sex],
+                'hypertension': [inverse_dictionary['hypertension'][int(hypertension)]],
+                'hyperlipidemia': [inverse_dictionary['hyperlipidemia'][int(hyperlipidemia)]],
+                'DMII_preoperative': [inverse_dictionary['DMII_preoperative'][int(DMII_preoperative)]],
+                'surgery': [surgery],
+                'antidiab_drug_preop_Oral_anticogulation': [inverse_dictionary['antidiab_drug_preop_Oral_anticogulation'][int(antidiab_drug_preop_Oral_anticogulation)]],
+                'antidiab_drug_preop_Insulin': [inverse_dictionary['antidiab_drug_preop_Insulin'][int(antidiab_drug_preop_Insulin)]],
+                'antidiab_drug_preop_no_therapy': [inverse_dictionary['antidiab_drug_preop_no_therapy'][int(antidiab_drug_preop_no_therapy)]],
+                'antidiab_drug_preop_glp1_analogen': [inverse_dictionary['antidiab_drug_preop_glp1_analogen'][int(antidiab_drug_preop_glp1_analogen)]],
+                'osas_preoperative': [inverse_dictionary['osas_preoperative'][int(osas_preoperative)]]
+            }
+            dataframe_input = pd.DataFrame(input_data)
+            
+            # Run prediction
+            summary_df = parser_user_input(dataframe_input, reg_model, clf_model)
+            
+            # Display results
+            st.subheader("Predicted Outcomes at Key Timepoints")
+            cols = st.columns(3)
+            bmi_1y = summary_df.loc[summary_df['Time'] == '12m', 'BMI'].values[0]
+            bmi_3y = summary_df.loc[summary_df['Time'] == '3y', 'BMI'].values[0]
+            bmi_5y = summary_df.loc[summary_df['Time'] == '5y', 'BMI'].values[0]
+            
+            cols[0].metric(label="BMI at 1 Year", value=f"{bmi_1y:.1f}")
+            cols[1].metric(label="BMI at 3 Years", value=f"{bmi_3y:.1f}")
+            cols[2].metric(label="BMI at 5 Years", value=f"{bmi_5y:.1f}")
+
+            # Create and display animated chart
+            create_animated_bmi_chart(summary_df)
+            
+            if DMII_preoperative:
+                st.subheader("Diabetes Remission Likelihood")
+                dm_prob_df = summary_df[['Time', 'DM Likelihood (%)']].set_index('Time')
+                
+                # Apply scientific styling with a color gradient
+                styled_dm_table = dm_prob_df.style.format({
+                    "DM Likelihood (%)": "{:.1f}%"
+                }).background_gradient(
+                    cmap='RdYlGn_r',  # Red-Yellow-Green (Reversed)
+                    subset=['DM Likelihood (%)'],
+                    vmin=0,
+                    vmax=100
+                ).set_properties(**{
+                    'text-align': 'center',
+                    'font-size': '14px',
+                    'width': '100px'
+                }).set_table_styles([
+                    {'selector': 'th', 'props': [('text-align', 'center'), ('font-size', '16px')]},
+                ])
+                
+                st.write(styled_dm_table)
+    
+    else:
+        st.info("Please enter patient data and click 'Compute Prediction' to see the results.")
+
+# --- FOOTER ---
+st.markdown("---")
+st.markdown("""
+<div style="text-align: center; font-size: 16px; color: grey;">
+    <b>Disclaimer:</b> This application and its results are intended for research purposes only. 
+    It is not a medical device and should not be used for clinical decision-making.
+</div>
+""", unsafe_allow_html=True)
+# Sponsor Images
+images = [r'images/basel.png',
+          r'images/Logo_Unibas_BraPan_EN.png',
+          r'images/kannospital.png',
+          r'images/basel_2.png',
+          r'images/claraspital.png',
+          r'images/wuzburg.png',
+          r'images/linkoping_university.png',
+          r'images/umm.png',
+          r'images/tiroler.png',
+          r'images/marmara_university.png',
+          r'images/gzo_hospital.png',
+          r'images/thurgau_spital.jpg',
+          r'images/warsaw_medical_university.png',            
+          r'images/nova_medical_school.png',
+          r'images/ECU.png'   
+          ]
+
+st.markdown("---")
+st.markdown("<p style='text-align: center;'><strong>Collaborations:</strong></p>", unsafe_allow_html=True)
+partner_logos = [
+{
+    "title": "",
+    "text": "",
+    "img": images[0]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[1]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[2]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[3]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[4]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[5]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[6]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[7]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[8]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[9]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[10]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[11]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[12]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[13]
+},
+{
+    "title": "",
+    "text" : "",
+    "img": images[14]
+}]
+carousel(items=partner_logos, width=0.25)
