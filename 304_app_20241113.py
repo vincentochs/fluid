@@ -2,7 +2,7 @@
 """
 Created on Fri Nov  1 22:10:54 2024
 
-@author: Vincent Ochs
+@author: Vincent Ochs 
 """
 
 ###############################################################################
@@ -29,49 +29,10 @@ from scipy.ndimage import gaussian_filter
 from scipy.interpolate import griddata
 from matplotlib import gridspec
 # Models
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
+from pycaret.classification import load_model
 
 print('Libreries loaded')
 
-###############################################################################
-# Define model architecture
-class ThresholdLayer(nn.Module):
-    def __init__(self):
-        super(ThresholdLayer, self).__init__()
-        self.threshold1_low = nn.Parameter(torch.tensor(0.0))
-        self.threshold1_high = nn.Parameter(torch.tensor(1.0))
-        self.threshold2_low = nn.Parameter(torch.tensor(0.0))
-        self.threshold2_high = nn.Parameter(torch.tensor(1.0))
-
-    def forward(self, feature1, feature2):
-        within_threshold1 = (feature1 >= self.threshold1_low) & (feature1 <= self.threshold1_high)
-        within_threshold2 = (feature2 >= self.threshold2_low) & (feature2 <= self.threshold2_high)
-        risk_score = 1 - (within_threshold1 & within_threshold2).float()
-        return risk_score
-
-class RiskClassificationModel(nn.Module):
-    def __init__(self, other_features_dim, hidden_dim):
-        super(RiskClassificationModel, self).__init__()
-        self.threshold_layer = ThresholdLayer()
-        self.fc1 = nn.Linear(other_features_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim + hidden_dim, 1)
-
-    def forward(self, feature1, feature2, other_features):
-        risk_score = self.threshold_layer(feature1, feature2).view(-1, 1)
-        x = F.relu(self.fc1(other_features))
-        risk_score_expanded = risk_score.expand(-1, x.size(1))
-        combined_features = torch.cat([x, risk_score_expanded], dim=1)
-        output = torch.sigmoid(self.fc2(combined_features))
-        return output
-# Define function to save pytorch model for early stopping
-def checkpoint(model, filename):
-    torch.save(model.state_dict(), filename)
-# Define function to load best early stopping pytorch model to continue with the evaluation
-def resume(model, filename):
-    model.load_state_dict(torch.load(filename))
 ###############################################################################
 # PARAMETERS SECTION
 # Define operation time and fluid sume range to simulate
@@ -82,50 +43,50 @@ MAXIMUM_FLUID_SUM = 8_000
 
 
 # Define dictionary for model inputs names
-INPUT_FEATURES = {'sex' : {'Male' : 1,
-                                                'Female' : 2},
-                  'smoking' : {'Yes' : 1,
-                                                      'No' : 0},
-                  'alcohol_abuse' : {'<2 beverages/day' : 1,
-                                                                                                                  '>= 2 beverages/day' : 2,
-                                                                                                                  'No alcohol abuse' : 3,
-                                                                                                                  'Unknown' : 4},
-                  'ckd_stage' : {'G1' : 1,
-                                                                                                              'G2' : 2,
-                                                                                                              'G3a' : 3,
-                                                                                                              'G3b' : 4,
-                                                                                                              'G4' : 5,
-                                                                                                              'G5' : 6},
+INPUT_FEATURES = {'Sex' : {'Male' : 1,
+                            'Female' : 2},
+                  'Smoking' : {'Yes' : 1,
+                                'No' : 0},
+                  'Alcohol Abuse' : {'<2 beverages/day' : 1,
+                                    '>= 2 beverages/day' : 2,
+                                    'No alcohol abuse' : 3,
+                                    'Unknown' : 4},
+                  'CKD Stages' : {'G1' : 1,
+                                    'G2' : 2,
+                                    'G3a' : 3,
+                                    'G3b' : 4,
+                                    'G4' : 5,
+                                    'G5' : 6},
                   'liver_mets' : {'Yes' : 1,
                                                                                                  'No' : 2,
                                                                                                  'Unknown' : 3},
-                  'neoadj_therapy' : {'Yes' : 1,
+                  'Neoadjuvant Therapy' : {'Yes' : 1,
                                                            'No' : 0},
-                  'immunosuppressive' : {'Yes' : 1,
-                                                                                                                      'No' : 0,
-                                                                                                                      'Unknown' : 2},
-                  'steroid_use' : {'Yes' : 1,
+                  'Immunosuppressive Drugs' : {'Yes' : 1,
+                                                'No' : 0,
+                                                'Unknown' : 2},
+                  'Steroid Use' : {'Yes' : 1,
                                                                             'No' : 0,
                                                                             'Unknown' : 2},
                   'Preoperative NSAIDs use (1: Yes, 0: No, 2: Unknown)' : {'Yes' : 1,
                                                                            'No' : 0,
                                                                            'Unknown' : 2},
-                  'blood_transf' : {'Yes' : 1,
-                                                                                  'No' : 0,
-                                                                                  'Unknown' : 2},
+                  'Blood Transfusion' : {'Yes' : 1,
+                                        'No' : 0,
+                                        'Unknown' : 2},
                   'TNF Alpha Inhib (1=yes, 0=no)' : {'Yes' : 1,
                                                      'No' : 0},
                   'charlson_index' : {str(i) : i for i in range(17)},
-                  'asa_score' :  {'1: Healthy Person' : 1,
+                  'Asa Score':  {'1: Healthy Person' : 1,
                            '2: Mild Systemic disease' : 2,
                            '3: Severe syatemic disease' : 3,
                            '4: Severe systemic disease that is a constan threat to life' : 4,
                            '5: Moribund person' : 5,
                            '6: Unkonw' : 6},
-                  'prior_surgery' : {'Yes' : 1,
-                                                                           'No' : 2,
-                                                                           'Unknown' : 3},
-                  'indication' : {'Recurrent Diverticulitis' : 1,
+                  'Prior Abdominal Surgery' : {'Yes' : 1,
+                                    'No' : 2,
+                                    'Unknown' : 3},
+                  'Indication': {'Recurrent Diverticulitis' : 1,
                                 'Acute Diverticulitis' : 2,
                                 'Ileus/Stenosis' : 3,
                                 'Ischemia' : 4,
@@ -137,7 +98,7 @@ INPUT_FEATURES = {'sex' : {'Male' : 1,
                                 'Other' : 10,
                                 'Ileostoma reversal' : 11,
                                 'Colostoma reversal' : 12},
-                  'operation' : {'Rectosigmoid resection/sigmoidectomy' : 1,
+                  'Operation' : {'Rectosigmoid resection/sigmoidectomy' : 1,
                                  'Left hemicolectomy' : 2,
                                  'Extended left hemicolectomy' : 3, 
                                  'Right hemicolectomy' : 4, 
@@ -154,17 +115,17 @@ INPUT_FEATURES = {'sex' : {'Male' : 1,
                                  'Hartmann resection / Colostomy' : 15, 
                                  'Colon segment resection' : 16, 
                                  'Small bowl resection' : 17},
-                  'emerg_surg' : {'Yes' : 1,
-                                                                     'No' : 0,
-                                                                     'Unknown' : 2},
-                  'perforation' : {'Yes' : 1,
-                                                   'No' : 0},
-                  'approach' : {'1: Laparoscopic' : 1 ,
+                  'Emergency Surgery' : {'Yes' : 1,
+                                        'No' : 0,
+                                        'Unknown' : 2},
+                  'Perforation' : {'Yes' : 1,
+                                    'No' : 0},
+                  'Approach' : {'1: Laparoscopic' : 1 ,
                                         '2: Robotic' : 2 ,
                                         '3: Open to open' : 3,
                                         '4: Conversion to open' : 4,
                                         '5: Conversion to laparoscopy' : 5},
-                  'anast_type' : {'Colon anastomosis' : 1,
+                  'Type of Anastomosis': {'Colon anastomosis' : 1,
                                     'Colorectal anastomosis' : 2, 
                                     'Ileocolonic anastomosis' : 3, 
                                     'Ileorectal anastomosis' : 4, 
@@ -172,22 +133,24 @@ INPUT_FEATURES = {'sex' : {'Male' : 1,
                                     'Colopouch' : 6, 
                                     'Small intestinal anastomosis' : 7, 
                                     'Unknown' : 8},
-                  'anast_technique' : {'1: Stapler' : 1,
+                  'Anastomotic Technique' : {'1: Stapler' : 1,
                                                                                                                                    '2: Hand-sewn' : 2,
                                                                                                                                    '3: Stapler and Hand-sewn' : 3,
                                                                                                                                    '4: Unknown' : 4},
-                  'anast_config' : {'End to End' : 1,
+                  'Anastomotic Configuration' : {'End to End' : 1,
                                                                                                                               'Side to End' : 2,
                                                                                                                               'Side to Side' : 3,
                                                                                                                               'End to Side' : 4},
-                  'protect_stomy' : {'Ileostomy' : 1,
+                  'Protective Stomy' : {'Ileostomy' : 1,
                                                                                                          'Colostomy' : 2,
                                                                                                          'No protective stomy' : 3,
                                                                                                          'Unknown' : 4},
-                  "surgeon_exp" : {'Consultant' : 1,
+                  "Surgeon's Experience" : {'Consultant' : 1,
                                 'Teaching Operation' : 2,
                                 'Unknown' : 3},
-                  'nutr_status_pts' :  {str(i) : i for i in range(7)}}
+                  'Points Nutritional Status' :  {str(i) : i for i in range(7)},
+                  'Psychosomatic / Pshychiatric Disorders' : {'Yes' : 1,
+                                                              'No' : 0}}
 
 ###############################################################################
 # Section when the app initialize and load the required information
@@ -195,29 +158,22 @@ INPUT_FEATURES = {'sex' : {'Male' : 1,
 def initialize_app():   
     # Load model
     path_model = r'models'
-    preprocesor_filename = r'/304_preprocesor.joblib'
-    model_filename = r'/304_model_yes_weight_risk.pth'
-    other_features_dim = 30
-    hidden_dim = 512
-    preprocesor = joblib.load(path_model + preprocesor_filename)
-    model = RiskClassificationModel(other_features_dim=other_features_dim, hidden_dim=hidden_dim)
-    resume(model, path_model + model_filename)
-    print('File loaded -->' , path_model + model_filename)
-    print('File loaded -->' , path_model + preprocesor_filename)
+    model_name = '\pipeline'
+    model = load_model(path_model + model_name)
+    print('File loaded -->' , path_model + model_name)
     
     print('App Initialized correctly!')
     
-    return model , preprocesor
+    return model
 
 # Function to parser input
-def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -> None:
+def parser_input(df_input: pd.DataFrame, model) -> None:
     """
     Parse input data, generate predictions, and create a 3D surface plot of anastomotic leakage risk.
     
     Args:
         df_input: Input DataFrame containing patient data
-        model: PyTorch model for predictions
-        preprocessor: Data preprocessor (currently unused)
+        model:  model for predictions
     
     Returns:
         None - Displays plot and statistics via Streamlit
@@ -231,7 +187,6 @@ def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -
             if col in INPUT_FEATURES:
                 df[col] = df[col].map(INPUT_FEATURES[col])
         
-        df['data_group_encoded'] = 2
         return df
     
     def generate_combinations(df: pd.DataFrame) -> pd.DataFrame:
@@ -245,23 +200,18 @@ def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -
         
         combinations = list(product(time_range, fluid_range))
         df_combinations = pd.DataFrame(combinations, 
-                                     columns=['Operation time (min)', 'Fluid_sum'])
+                                     columns=['Operation time', 'Fluid Sum'])
         
         # Repeat input data for each combination
         df_repeated = pd.concat([df] * len(combinations), ignore_index=True)
         return pd.concat([df_combinations, df_repeated], axis=1)
     
     def make_predictions(df: pd.DataFrame) -> np.ndarray:
-        model.eval()
-        with torch.no_grad():
-            test_f1 = torch.tensor(df['Fluid_sum'].values, dtype=torch.float32).view(-1, 1)
-            test_f2 = torch.tensor(df['Operation time (min)'].values, dtype=torch.float32).view(-1, 1)
-            test_other = torch.tensor(
-                df.drop(columns=['Fluid_sum', 'Operation time (min)']).values, 
-                dtype=torch.float32
-            )
-            predictions = model(test_f1, test_f2, test_other).squeeze()
-        return predictions.numpy() * 100
+        df['Anastomotic Leackage (1: Yes, 0: No)'] = np.nan
+        df = df[model.feature_names_in_]
+        df = df.drop(columns = ['Anastomotic Leackage (1: Yes, 0: No)'])
+        predictions = model.predict_proba(df)[: , 1] * 100
+        return predictions
     
     def create_surface_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
         # Create figure with more space for labels
@@ -276,8 +226,8 @@ def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -
         
         # Create pivot table for surface plot
         pivot_table = df_plot.pivot_table(
-            index='Operation time (min)', 
-            columns='Fluid_sum', 
+            index='Operation time', 
+            columns='Fluid Sum', 
             values='pred_proba'
         )
         
@@ -365,7 +315,160 @@ def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -
         plt.tight_layout()
         
         st.pyplot(fig)
-    
+        
+    def create_heatmap_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
+        """
+        Create a 2D heatmap of anastomotic leakage risk based on operation time and fluid volume.
+        
+        Args:
+            df_plot: DataFrame containing 'Operation time', 'Fluid Sum', and 'pred_proba' columns
+            min_point: Dictionary with minimum risk point information
+        
+        Returns:
+            None - Displays plot via Streamlit
+        """
+        # Create figure with subplots for heatmap and annotation
+        gs = gridspec.GridSpec(1, 2, width_ratios=[4, 1])
+        fig = plt.figure(figsize=(14, 8))
+        
+        # Main heatmap subplot
+        ax = fig.add_subplot(gs[0])
+        
+        # Annotation subplot
+        annotation_ax = fig.add_subplot(gs[1])
+        annotation_ax.axis('off')
+        
+        # Create pivot table for heatmap
+        pivot_table = df_plot.pivot_table(
+            index='Operation time', 
+            columns='Fluid Sum', 
+            values='pred_proba'
+        )
+        
+        # Create the heatmap
+        im = ax.imshow(pivot_table.values, 
+                       cmap='coolwarm', 
+                       aspect='auto',
+                       origin='lower',
+                       extent=[pivot_table.columns.min(), pivot_table.columns.max(),
+                              pivot_table.index.min(), pivot_table.index.max()])
+        
+        # Add colorbar
+        cbar = fig.colorbar(im, ax=ax, shrink=0.8, aspect=20, pad=0.02)
+        cbar.set_label('Risk of Anastomotic Leakage (%)', rotation=90, labelpad=15, fontsize=12)
+        
+        # Mark the minimum risk point
+        ax.scatter(min_point['fluid'], min_point['time'], 
+                  color='white', s=150, marker='*', 
+                  edgecolors='black', linewidth=2, 
+                  label='Minimum Risk Point', zorder=5)
+        
+        # Add text annotation near the minimum point
+        ax.annotate('MIN', 
+                    xy=(min_point['fluid'], min_point['time']),
+                    xytext=(10, 10), textcoords='offset points',
+                    color='black', fontweight='bold', fontsize=12,
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8),
+                    zorder=6)
+        
+        # Set labels and title
+        ax.set_xlabel('Fluid Volume (mL)', fontsize=14, labelpad=10)
+        ax.set_ylabel('Operation Time (minutes)', fontsize=14, labelpad=10)
+        ax.set_title('Anastomotic Leakage Risk Heatmap\n(Operation Time vs Fluid Volume)', 
+                    fontsize=16, pad=20)
+        
+        # Add grid for better readability
+        ax.grid(True, alpha=0.3, linestyle='--')
+        
+        # Add legend
+        ax.legend(loc='upper right', framealpha=0.9)
+        
+        # Format axes with better tick spacing
+        x_ticks = np.linspace(pivot_table.columns.min(), pivot_table.columns.max(), 8)
+        y_ticks = np.linspace(pivot_table.index.min(), pivot_table.index.max(), 8)
+        ax.set_xticks(x_ticks)
+        ax.set_yticks(y_ticks)
+        ax.set_xticklabels([f'{int(x)}' for x in x_ticks])
+        ax.set_yticklabels([f'{int(y)}' for y in y_ticks])
+        
+        # Create detailed annotation in the side panel
+        min_risk_info = (
+            f"MINIMUM RISK POINT\n\n"
+            f"Operation Time:\n{min_point['time']:.0f} minutes\n\n"
+            f"Fluid Volume:\n{min_point['fluid']:.0f} mL\n\n"
+            f"Risk:\n{min_point['risk']:.2f}%\n\n"
+            f"RISK ZONES:\n\n"
+            f"Low Risk\n(Blue areas)\n\n"
+            f"Moderate Risk\n(Yellow areas)\n\n"
+            f"High Risk\n(Red areas)"
+        )
+        
+        annotation_ax.text(0.05, 0.5, min_risk_info, 
+                          fontsize=12, 
+                          color='#2E2E2E',
+                          va='center', ha='left',
+                          bbox=dict(boxstyle="round,pad=0.5", 
+                                   facecolor='#F8F9FA', 
+                                   edgecolor='#DEE2E6',
+                                   alpha=0.95))
+        
+        # Adjust layout
+        plt.tight_layout()
+        
+        # Display the plot
+        st.pyplot(fig)
+
+    ## Function to create the smooth heatmap (filled contour plot).
+    def create_smooth_heatmap_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
+        """
+        Creates a smooth 2D heatmap using a filled contour plot.
+        This visualization matches the style of the user's second example image.
+
+        Args:
+            df_plot (pd.DataFrame): DataFrame with 'Operation time', 'Fluid Sum', 'pred_proba'.
+            min_point (dict): Dictionary with minimum risk point info (not used in this plot).
+        """
+        fig = plt.figure(figsize=(12, 9))
+        ax = fig.add_subplot(111)
+
+        # To match the example, we convert Fluid Volume from mL to L for the y-axis
+        df_plot_liters = df_plot.copy()
+        df_plot_liters['Fluid Sum'] = df_plot_liters['Fluid Sum'] / 1000.0
+
+        # Create a pivot table. Note the axes are swapped compared to the other plots
+        # to match the example image (Time on X-axis, Fluid on Y-axis).
+        pivot_table = df_plot_liters.pivot_table(
+            index='Fluid Sum',        # This will be the Y-axis (in Liters)
+            columns='Operation time', # This will be the X-axis
+            values='pred_proba'
+        )
+
+        # Get X, Y, and Z data for the contour plot
+        X, Y = np.meshgrid(pivot_table.columns, pivot_table.index)
+        Z = pivot_table.values
+
+        # Use contourf to create a filled contour plot, which gives a smooth appearance.
+        # 'levels' determines how many color steps to show. More levels = smoother.
+        # 'plasma' is a colormap similar to the purple-to-yellow in the example.
+        contour = ax.contourf(X, Y, Z, levels=50, cmap='plasma')
+
+        # Add a colorbar to show the risk scale
+        cbar = fig.colorbar(contour)
+        cbar.set_label('Leakage Risk (%)', fontsize=12, labelpad=10)
+
+        # Set labels and title
+        ax.set_xlabel('Operation Time (minutes)', fontsize=14, labelpad=10)
+        ax.set_ylabel('Fluid Volume (L)', fontsize=14, labelpad=10)
+        ax.set_title('Smooth Anastomotic Leakage Risk Heatmap', fontsize=16, pad=20)
+
+        # Add a dashed grid for better readability
+        ax.grid(True, linestyle='--', alpha=0.5)
+
+        # Adjust layout and display the plot in Streamlit
+        plt.tight_layout()
+        st.pyplot(fig)
+
+    ###########################################################################
     with st.status("Processing data...") as status:
         df_processed = prepare_data()
         df_combinations = generate_combinations(df_processed)
@@ -374,7 +477,6 @@ def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -
     )
     
     with st.status("Generating predictions..."):
-        random_noise = random.random() * 100
         df_combinations['pred_proba'] = make_predictions(df_combinations)
         
         print(f"Original df:\n {df_combinations.head()}")
@@ -390,10 +492,10 @@ def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -
         
         #for operation time
         
-        df_combinations['pred_proba'] = np.select(condlist = [(df_combinations['Fluid_sum'] > 2_000)&(df_combinations['Fluid_sum'] <= 3_500),
-                                                              (df_combinations['Fluid_sum'] > 3_500)&(df_combinations['Fluid_sum'] <= 4_500),
-                                                              df_combinations['Fluid_sum'] > 4_500,
-                                                              df_combinations['Fluid_sum'] >= 1000],
+        df_combinations['pred_proba'] = np.select(condlist = [(df_combinations['Fluid Sum'] > 2_000)&(df_combinations['Fluid Sum'] <= 3_500),
+                                                              (df_combinations['Fluid Sum'] > 3_500)&(df_combinations['Fluid Sum'] <= 4_500),
+                                                              df_combinations['Fluid Sum'] > 4_500,
+                                                              df_combinations['Fluid Sum'] >= 1000],
                                                   choicelist = [df_combinations['pred_proba'] - random.random() * 100 * 0.5,
                                                                 df_combinations['pred_proba'] + random.random() * 100 * 0.25,
                                                                 df_combinations['pred_proba'] + random.random() * 100 * 0.5,
@@ -402,10 +504,10 @@ def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -
         
         print(f"After fluid df:\n {df_combinations.head()}")
         
-        df_combinations['pred_proba'] = np.select(condlist = [(df_combinations['Operation time (min)'] > 90)&(df_combinations['Operation time (min)'] <= 180),
-                                                              (df_combinations['Operation time (min)'] > 180)&(df_combinations['Fluid_sum'] <= 240),
-                                                              df_combinations['Operation time (min)'] > 240,
-                                                              df_combinations['Operation time (min)'] >= 45],
+        df_combinations['pred_proba'] = np.select(condlist = [(df_combinations['Operation time'] > 90)&(df_combinations['Operation time'] <= 180),
+                                                              (df_combinations['Operation time'] > 180)&(df_combinations['Operation time'] <= 240),
+                                                              df_combinations['Operation time'] > 240,
+                                                              df_combinations['Operation time'] >= 45],
                                                   choicelist = [df_combinations['pred_proba'] - random.random() * 100 * 0.5,
                                                                 df_combinations['pred_proba'] + random.random() * 100 * 0.25,
                                                                 df_combinations['pred_proba'] + random.random() * 100 * 0.5,
@@ -423,23 +525,43 @@ def parser_input(df_input: pd.DataFrame, model: torch.nn.Module, preprocessor) -
         print(f"After range adjustment df:\n {df_combinations.head()}")
         
         # Extract plot data
-        df_plot = df_combinations[['Operation time (min)', 'Fluid_sum', 'pred_proba']]
+        df_plot = df_combinations[['Operation time', 'Fluid Sum', 'pred_proba']]
         min_row = df_plot.loc[df_plot['pred_proba'].idxmin()]
         
         min_point = {
-            'time': min_row['Operation time (min)'],
-            'fluid': min_row['Fluid_sum'],
+            'time': min_row['Operation time'],
+            'fluid': min_row['Fluid Sum'],
             'risk': min_row['pred_proba']
         }
     
-    with st.status("Creating visualization...") as status:
-        create_surface_plot(df_plot, min_point)
+    with st.status("Creating visualizations...") as status:
+       
+        #tab1, tab2, tab3 = st.tabs(["3D Surface Plot", "2D Heatmap", "Smooth 2D Heatmap"])
+        #with tab1:
+        #    st.subheader("3D Surface Visualization")
+        #    create_surface_plot(df_plot, min_point)
         
-        st.write(f"The minimum AL Likelihood is **{min_point['risk']:.2f}**, "
-                f"which occurs with Operation Time = **{min_point['time']:.0f}** "
-                f"and Fluid Volume = **{min_point['fluid']:.0f}**")
+        #with tab2:
+        #    st.subheader("2D Heatmap Visualization")
+        #    create_heatmap_plot(df_plot, min_point)
+        
+        ## Added a third tab and called the new plotting function.
+        #with tab3:
+        #    st.subheader("2D Heatmap Visualization")
+        #    create_smooth_heatmap_plot(df_plot, min_point)
+        st.subheader("2D Heatmap Visualization")
+        create_smooth_heatmap_plot(df_plot, min_point)
+        # Show minimum risk information (this appears below all tabs)
+        st.info(
+            f"**Optimal Parameters:** The minimum AL likelihood is **{min_point['risk']:.2f}%**, "
+            f"which occurs with Operation Time = **{min_point['time']:.0f} minutes** "
+            f"and Fluid Volume = **{min_point['fluid']:.0f} mL**"
+        )
+        
         status.update(
-        label = "Plot created", state="complete", expanded=True
+            label="All visualizations created successfully", 
+            state="complete", 
+            expanded=True
         )
 
 ###############################################################################
@@ -449,7 +571,7 @@ st.set_page_config(
 )
 st.set_option('deprecation.showPyplotGlobalUse', False)
 # Initialize app
-model , preprocesor = initialize_app()
+model = initialize_app()
 
 # Option Menu configuration
 with st.sidebar:
@@ -498,33 +620,34 @@ if selected == 'Prediction':
     bmi = st.sidebar.slider("Preoperative BMI:", min_value = 18, max_value = 50,step = 1)
     preoperative_hemoglobin_level = st.sidebar.slider("Preoperative Hemoglobin Level:", min_value = 0.0, max_value = 30.0,step = 0.1)
     preoperative_leukocyte_count_level = st.sidebar.slider("Preoperative Leukocyte Count:", min_value = 0.0, max_value = 30.0,step = 0.1)
-    preoperative_albumin_level = st.sidebar.slider("Preoperative Albumin Level:", min_value = 0.0, max_value = 30.0,step = 0.1)
-    preoperative_crp_level = st.sidebar.slider("Preoperative CRP Level:", min_value = 0.0, max_value = 100.0,step = 0.1)
-    sex = st.sidebar.selectbox('Gender', tuple(INPUT_FEATURES['sex'].keys()))
-    active_smoking = st.sidebar.selectbox('Active Smoking', tuple(INPUT_FEATURES['smoking'].keys()))
-    alcohol_abuse = st.sidebar.selectbox('Alcohol Abuse', tuple(INPUT_FEATURES['alcohol_abuse'].keys()))
-    renal_function = st.sidebar.selectbox('Renal Function CKD Stages', tuple(INPUT_FEATURES['ckd_stage'].keys()))
-    liver_metastasis = st.sidebar.selectbox('Liver Metastasis', tuple(INPUT_FEATURES['liver_mets'].keys()))
-    neoadjuvant_therapy = st.sidebar.selectbox('Neoadjuvant Therapy', tuple(INPUT_FEATURES['neoadj_therapy'].keys()))
-    preoperative_use_immunodepressive_drugs = st.sidebar.selectbox('Use of Immunodepressive Drugs', tuple(INPUT_FEATURES['immunosuppressive'].keys()))
-    preoperative_steroid_use = st.sidebar.selectbox('Steroid Use', tuple(INPUT_FEATURES[ 'steroid_use'].keys()))
+    #preoperative_albumin_level = st.sidebar.slider("Preoperative Albumin Level:", min_value = 0.0, max_value = 30.0,step = 0.1)
+    #preoperative_crp_level = st.sidebar.slider("Preoperative CRP Level:", min_value = 0.0, max_value = 100.0,step = 0.1)
+    sex = st.sidebar.selectbox('Gender', tuple(INPUT_FEATURES['Sex'].keys()))
+    active_smoking = st.sidebar.selectbox('Active Smoking', tuple(INPUT_FEATURES['Smoking'].keys()))
+    alcohol_abuse = st.sidebar.selectbox('Alcohol Abuse', tuple(INPUT_FEATURES['Alcohol Abuse'].keys()))
+    renal_function = st.sidebar.selectbox('Renal Function CKD Stages', tuple(INPUT_FEATURES['CKD Stages'].keys()))
+    #liver_metastasis = st.sidebar.selectbox('Liver Metastasis', tuple(INPUT_FEATURES['liver_mets'].keys()))
+    neoadjuvant_therapy = st.sidebar.selectbox('Neoadjuvant Therapy', tuple(INPUT_FEATURES['Neoadjuvant Therapy'].keys()))
+    preoperative_use_immunodepressive_drugs = st.sidebar.selectbox('Use of Immunodepressive Drugs', tuple(INPUT_FEATURES['Immunosuppressive Drugs'].keys()))
+    preoperative_steroid_use = st.sidebar.selectbox('Steroid Use', tuple(INPUT_FEATURES['Steroid Use'].keys()))
     #preoperative_nsaids_use = st.sidebar.selectbox('NSAIDs Use', tuple(INPUT_FEATURES['Preoperative NSAIDs use (1: Yes, 0: No, 2: Unknown)'].keys()))
-    preoperative_blood_transfusion = st.sidebar.selectbox('Preoperative Blood Transfusion', tuple(INPUT_FEATURES['blood_transf'].keys()))
+    preoperative_blood_transfusion = st.sidebar.selectbox('Preoperative Blood Transfusion', tuple(INPUT_FEATURES['Blood Transfusion'].keys()))
     #tnf_alpha = st.sidebar.selectbox('TNF Alpha', tuple(INPUT_FEATURES['TNF Alpha Inhib (1=yes, 0=no)'].keys()))
-    cci = st.sidebar.selectbox('Charlson Comorbility Index', tuple(INPUT_FEATURES['charlson_index'].keys()))
-    asa_score = st.sidebar.selectbox('ASA Score', tuple(INPUT_FEATURES['asa_score'].keys()))
-    prior_abdominal_surgery = st.sidebar.selectbox('Prior abdominal surgery', tuple(INPUT_FEATURES['prior_surgery'].keys()))
-    indication = st.sidebar.selectbox('Indication', tuple(INPUT_FEATURES['indication'].keys()))
-    operation_type = st.sidebar.selectbox('Operation', tuple(INPUT_FEATURES['operation'].keys())) 
-    emergency_surgery = st.sidebar.selectbox('Emergency Surgery', tuple(INPUT_FEATURES['emerg_surg'].keys()))
-    perforation = st.sidebar.selectbox('Perforation', tuple(INPUT_FEATURES['perforation'].keys()))
-    approach = st.sidebar.selectbox('Approach', tuple(INPUT_FEATURES['approach'].keys()))
-    type_of_anastomosis = st.sidebar.selectbox('Type of Anastomosis', tuple(INPUT_FEATURES['anast_type'].keys()))
-    anastomotic_technique = st.sidebar.selectbox('Anastomotic Technique', tuple(INPUT_FEATURES['anast_technique'].keys()))
-    anastomotic_configuration = st.sidebar.selectbox('Anastomotic Configuration', tuple(INPUT_FEATURES['anast_config'].keys())) 
-    protective_stomy = st.sidebar.selectbox('Protective Stomy', tuple(INPUT_FEATURES['protect_stomy'].keys()))
-    surgeon_experience = st.sidebar.selectbox('Surgeon Experience', tuple(INPUT_FEATURES[ "surgeon_exp"].keys()))
-    total_points_nutritional_status = st.sidebar.selectbox('Points Nutritional Status', tuple(INPUT_FEATURES['nutr_status_pts'].keys())) 
+    #cci = st.sidebar.selectbox('Charlson Comorbility Index', tuple(INPUT_FEATURES['charlson_index'].keys()))
+    asa_score = st.sidebar.selectbox('ASA Score', tuple(INPUT_FEATURES['Asa Score'].keys()))
+    prior_abdominal_surgery = st.sidebar.selectbox('Prior abdominal surgery', tuple(INPUT_FEATURES['Prior Abdominal Surgery'].keys()))
+    indication = st.sidebar.selectbox('Indication', tuple(INPUT_FEATURES['Indication'].keys()))
+    operation_type = st.sidebar.selectbox('Operation', tuple(INPUT_FEATURES['Operation'].keys())) 
+    emergency_surgery = st.sidebar.selectbox('Emergency Surgery', tuple(INPUT_FEATURES['Emergency Surgery'].keys()))
+    perforation = st.sidebar.selectbox('Perforation', tuple(INPUT_FEATURES['Perforation'].keys()))
+    approach = st.sidebar.selectbox('Approach', tuple(INPUT_FEATURES['Approach'].keys()))
+    type_of_anastomosis = st.sidebar.selectbox('Type of Anastomosis', tuple(INPUT_FEATURES['Type of Anastomosis'].keys()))
+    anastomotic_technique = st.sidebar.selectbox('Anastomotic Technique', tuple(INPUT_FEATURES['Anastomotic Technique'].keys()))
+    anastomotic_configuration = st.sidebar.selectbox('Anastomotic Configuration', tuple(INPUT_FEATURES['Anastomotic Configuration'].keys())) 
+    protective_stomy = st.sidebar.selectbox('Protective Stomy', tuple(INPUT_FEATURES['Protective Stomy'].keys()))
+    surgeon_experience = st.sidebar.selectbox('Surgeon Experience', tuple(INPUT_FEATURES["Surgeon's Experience"].keys()))
+    total_points_nutritional_status = st.sidebar.selectbox('Points Nutritional Status', tuple(INPUT_FEATURES['Points Nutritional Status'].keys())) 
+    #psychosomatic = st.sidebar.selectbox('Psychosomatic / Pshychiatric Disorders', tuple(INPUT_FEATURES['Psychosomatic / Pshychiatric Disorders'].keys())) 
     
     
     # Add subheader for initial operation time and fluid volumen
@@ -533,38 +656,39 @@ if selected == 'Prediction':
     #fluid_sum = st.slider("Fluid Volumen:" , min_value = 600.0, max_value = 200.0, step = 10.0)
     
     # Create df input
-    df_input = pd.DataFrame({'age' : [age],
-                             'bmi' : [bmi],
-                             'hgb_lvl' : [preoperative_hemoglobin_level],
-                             'wbc_count' : [preoperative_leukocyte_count_level],
-                             'alb_lvl' : [preoperative_albumin_level],
-                             'crp_lvl' : [preoperative_crp_level],
-                             'sex' : [sex],
-                             'smoking' : [active_smoking],
-                             'alcohol_abuse' : [alcohol_abuse],
-                             'ckd_stage' :[renal_function],
-                             'liver_mets' : [liver_metastasis],
-                             'neoadj_therapy' : [neoadjuvant_therapy],
-                             'immunosuppressive' : [preoperative_use_immunodepressive_drugs],
-                             'steroid_use' : [preoperative_steroid_use],
+    df_input = pd.DataFrame({'Age' : [age],
+                             'BMI' : [bmi],
+                             'Hemoglobin' : [preoperative_hemoglobin_level],
+                             'Leukocyte Count' : [preoperative_leukocyte_count_level],
+                             #'alb_lvl' : [preoperative_albumin_level],
+                             #'crp_lvl' : [preoperative_crp_level],
+                             'Sex' : [sex],
+                             'Smoking' : [active_smoking],
+                             'Alcohol Abuse' : [alcohol_abuse],
+                             'CKD Stages' :[renal_function],
+                             #'liver_mets' : [liver_metastasis],
+                             'Neoadjuvant Therapy' : [neoadjuvant_therapy],
+                             'Immunosuppressive Drugs' : [preoperative_use_immunodepressive_drugs],
+                             'Steroid Use' : [preoperative_steroid_use],
                              #'Preoperative NSAIDs use (1: Yes, 0: No, 2: Unknown)' : [preoperative_nsaids_use],
-                             'blood_transf' : [preoperative_blood_transfusion],
+                             'Blood Transfusion' : [preoperative_blood_transfusion],
                              #'TNF Alpha Inhib (1=yes, 0=no)' : [tnf_alpha],
-                             'charlson_index' : [cci],
-                             'asa_score' : [asa_score],
-                             'prior_surgery' : [prior_abdominal_surgery],
-                             'indication' : [indication],
-                             'operation' : [operation_type],
-                             'emerg_surg' : [emergency_surgery],
-                             'perforation' : [perforation],
-                             'approach' : [approach],
-                             'anast_type' : [type_of_anastomosis],
-                             'anast_technique' : [anastomotic_technique],
-                             'anast_config' : [anastomotic_configuration],
-                             'protect_stomy' : [protective_stomy],
-                             "surgeon_exp" : [surgeon_experience],
-                             'nutr_status_pts' : [total_points_nutritional_status]})
+                             #'charlson_index' : [cci],
+                             'Asa Score' : [asa_score],
+                             'Prior Abdominal Surgery' : [prior_abdominal_surgery],
+                             'Indication' : [indication],
+                             'Operation' : [operation_type],
+                             'Emergency Surgery' : [emergency_surgery],
+                             'Perforation' : [perforation],
+                             'Approach' : [approach],
+                             'Type of Anastomosis' : [type_of_anastomosis],
+                             'Anastomotic Technique' : [anastomotic_technique],
+                             'Anastomotic Configuration' : [anastomotic_configuration],
+                             'Protective Stomy' : [protective_stomy],
+                             "Surgeon's Experience" : [surgeon_experience],
+                             'Points Nutritional Status' : [total_points_nutritional_status]})
+                             #'Psychosomatic / Pshychiatric Disorders' : [psychosomatic]})
     # Parser input and make predictions
     predict_button = st.button('Predict')
     if predict_button:
-        parser_input(df_input ,model , preprocesor)
+        parser_input(df_input ,model)
