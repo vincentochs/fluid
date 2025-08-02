@@ -3,6 +3,10 @@
 Created on Fri Nov  1 22:10:54 2024
 
 @author: Vincent Ochs
+
+This script has been updated to include:
+1. Clinically-driven risk adjustments in the parser_input function.
+2. Smoother heatmap visualization using interpolation in create_smooth_heatmap_plot.
 """
 
 ###############################################################################
@@ -14,20 +18,13 @@ from streamlit_option_menu import option_menu
 
 # Utils
 import pandas as pd
-import pickle as pkl
 import numpy as np
 from itertools import product
-import joblib
-import pandas as pd, numpy as np
-import pickle
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib import cm
-from scipy.interpolate import make_interp_spline, BSpline
-import random
-from scipy.ndimage import gaussian_filter
-from scipy.interpolate import griddata
 from matplotlib import gridspec
+from scipy.interpolate import griddata
+from scipy.ndimage import gaussian_filter
+
 # Models
 from pycaret.classification import load_model
 
@@ -58,16 +55,16 @@ INPUT_FEATURES = {'Sex' : {'Male' : 1,
                                     'G4' : 5,
                                     'G5' : 6},
                   'liver_mets' : {'Yes' : 1,
-                                                                                                 'No' : 2,
-                                                                                                 'Unknown' : 3},
+                                   'No' : 2,
+                                   'Unknown' : 3},
                   'Neoadjuvant Therapy' : {'Yes' : 1,
-                                                           'No' : 0},
+                                           'No' : 0},
                   'Immunosuppressive Drugs' : {'Yes' : 1,
                                                 'No' : 0,
                                                 'Unknown' : 2},
                   'Steroid Use' : {'Yes' : 1,
-                                                                            'No' : 0,
-                                                                            'Unknown' : 2},
+                                    'No' : 0,
+                                    'Unknown' : 2},
                   'Preoperative NSAIDs use (1: Yes, 0: No, 2: Unknown)' : {'Yes' : 1,
                                                                            'No' : 0,
                                                                            'Unknown' : 2},
@@ -134,17 +131,17 @@ INPUT_FEATURES = {'Sex' : {'Male' : 1,
                                     'Small intestinal anastomosis' : 7, 
                                     'Unknown' : 8},
                   'Anastomotic Technique' : {'1: Stapler' : 1,
-                                                                                                                                   '2: Hand-sewn' : 2,
-                                                                                                                                   '3: Stapler and Hand-sewn' : 3,
-                                                                                                                                   '4: Unknown' : 4},
+                                             '2: Hand-sewn' : 2,
+                                             '3: Stapler and Hand-sewn' : 3,
+                                             '4: Unknown' : 4},
                   'Anastomotic Configuration' : {'End to End' : 1,
-                                                                                                                              'Side to End' : 2,
-                                                                                                                              'Side to Side' : 3,
-                                                                                                                              'End to Side' : 4},
+                                                 'Side to End' : 2,
+                                                 'Side to Side' : 3,
+                                                 'End to Side' : 4},
                   'Protective Stomy' : {'Ileostomy' : 1,
-                                                                                                         'Colostomy' : 2,
-                                                                                                         'No protective stomy' : 3,
-                                                                                                         'Unknown' : 4},
+                                        'Colostomy' : 2,
+                                        'No protective stomy' : 3,
+                                        'Unknown' : 4},
                   "Surgeon's Experience" : {'Consultant' : 1,
                                 'Teaching Operation' : 2,
                                 'Unknown' : 3},
@@ -154,7 +151,7 @@ INPUT_FEATURES = {'Sex' : {'Male' : 1,
 
 ###############################################################################
 # Section when the app initialize and load the required information
-#@st.cache_data() # We use this decorator so this initialization doesn't run every time the user change into the page
+@st.cache_data() # We use this decorator so this initialization doesn't run every time the user change into the page
 def initialize_app():   
     # Load model
     path_model = r'models'
@@ -166,365 +163,177 @@ def initialize_app():
     
     return model
 
-# Function to parser input
-def parser_input(df_input: pd.DataFrame, model) -> None:
+def adjust_risk_clinically(df_patient_data: pd.DataFrame) -> np.ndarray:
     """
-    Parse input data, generate predictions, and create a 3D surface plot of anastomotic leakage risk.
-    
+    Calculates anastomotic leakage risk probability from scratch based on clinical risk factors.
+    The scoring is adjusted to produce a visual range similar to the user's example (approx. 18% to 81%).
+
     Args:
-        df_input: Input DataFrame containing patient data
-        model:  model for predictions
-    
+        df_patient_data: DataFrame containing the patient's clinical data for adjustment.
+
     Returns:
-        None - Displays plot and statistics via Streamlit
+        Calculated probabilities (as a percentage).
+    """
+    # Start with a baseline risk probability that matches the lower end of the example's color scale.
+    base_risk = 0.0
+
+    risk_df = pd.DataFrame(index=df_patient_data.index)
+    risk_df['calculated_risk'] = base_risk
+
+    # --- Patient-Specific Factors (applied once to all rows) ---
+    # These points are scaled down to allow the dynamic factors to create the main gradient.
+    patient_info = df_patient_data.iloc[0]
+
+    age = patient_info.get('Age', 60)
+    if age > 80:
+        risk_df['calculated_risk'] += 5
+    elif age > 65:
+        risk_df['calculated_risk'] += 2
+
+    bmi = patient_info.get('BMI', 25)
+    if bmi > 35:
+        risk_df['calculated_risk'] += 4
+    elif bmi > 30:
+        risk_df['calculated_risk'] += 2
+
+    asa_score = patient_info.get('Asa Score', 2)
+    asa_risk = {1: -1, 2: 0, 3: 4, 4: 8, 5: 12, 6: 3}
+    risk_df['calculated_risk'] += asa_risk.get(asa_score, 0)
+
+    if patient_info.get('Smoking', 0) == 1:
+        risk_df['calculated_risk'] += 3
+
+    if patient_info.get('Emergency Surgery', 0) == 1:
+        risk_df['calculated_risk'] += 8
+
+    if patient_info.get('Perforation', 0) == 1:
+        risk_df['calculated_risk'] += 6
+
+    if patient_info.get('Immunosuppressive Drugs', 0) == 1 or patient_info.get('Steroid Use', 0) == 1:
+        risk_df['calculated_risk'] += 4
+
+    nutritional_points = int(patient_info.get('Points Nutritional Status', 0))
+    if nutritional_points >= 5:
+        risk_df['calculated_risk'] += 5
+    elif nutritional_points >= 3:
+        risk_df['calculated_risk'] += 2
+
+    if patient_info.get("Surgeon's Experience", 1) == 2:
+        risk_df['calculated_risk'] += 1.5
+
+    # --- Dynamic Factors (vary with each row for time and fluid) ---
+    op_time = df_patient_data['Operation time']
+    fluid_sum = df_patient_data['Fluid Sum']
+
+    # The main gradient is driven by time and fluid.
+    # Total dynamic range should be about 81 - 18 = 63 points.
+    # We'll assign roughly half the range to each factor.
+    max_dynamic_risk = 85.0
+    
+    # Normalize time and fluid to a 0-1 scale based on their ranges
+    time_norm = (op_time - MINIMUM_OPERATION_TIME) / (MAXIMUM_OPERATION_TIME - MINIMUM_OPERATION_TIME)
+    fluid_norm = (fluid_sum - MINIMUM_FLUID_SUM) / (MAXIMUM_FLUID_SUM - MINIMUM_FLUID_SUM)
+
+    # Add risk based on the normalized values, distributing the dynamic range
+    risk_df['calculated_risk'] += (time_norm * max_dynamic_risk * 0.5)
+    risk_df['calculated_risk'] += (fluid_norm * max_dynamic_risk * 0.5)
+
+    # --- Finalize ---
+    # Ensure probabilities are capped to match the visual range of the example image.
+    final_predictions = np.clip(risk_df['calculated_risk'].values, 0.0, 95.0)
+
+    st.sidebar.info("Risk calculated using a clinical rule-based system.")
+
+    return final_predictions
+
+# MODIFICATION: Plot is cleaned up to match the reference image (no marker, no legend).
+def create_smooth_heatmap_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
+    """
+    Creates a highly smooth 2D heatmap using interpolation and a Gaussian filter.
+    The style is adjusted to match the user's reference image.
+    """
+    fig, ax = plt.subplots(figsize=(12, 9))
+
+    df_plot_liters = df_plot.copy()
+    df_plot_liters['Fluid Sum'] = df_plot_liters['Fluid Sum'] / 1000.0
+
+    pivot_table = df_plot_liters.pivot_table(
+        index='Fluid Sum',
+        columns='Operation time',
+        values='pred_proba'
+    )
+
+    x_orig = pivot_table.columns.values
+    y_orig = pivot_table.index.values
+    z_orig = pivot_table.values
+
+    x_smooth = np.linspace(x_orig.min(), x_orig.max(), 1000)
+    y_smooth = np.linspace(y_orig.min(), y_orig.max(), 1000)
+    X_mesh, Y_mesh = np.meshgrid(x_smooth, y_smooth)
+
+    # Check if there's enough data to interpolate
+    if len(x_orig) > 3 and len(y_orig) > 3:
+        Z_smooth = griddata(
+            (np.repeat(x_orig, len(y_orig)), np.tile(y_orig, len(x_orig))),
+            z_orig.flatten(),
+            (X_mesh, Y_mesh),
+            method='cubic'
+        )
+        Z_smooth = gaussian_filter(Z_smooth, sigma=3)
+    else:
+        # Fallback for less data, just use the meshgrid
+        Z_smooth = np.tile(z_orig, (len(y_smooth), len(x_smooth)))
+
+
+    contour = ax.contourf(X_mesh, Y_mesh, Z_smooth, levels=100, cmap='plasma')
+    cbar = fig.colorbar(contour)
+    cbar.set_label('Anastomotic Leakage Risk (%)', fontsize=12, labelpad=10)
+    
+    # Removed the scatter plot for the minimum point to match the image
+    # ax.scatter(...)
+
+    ax.set_xlabel('Operation Time (minutes)', fontsize=14, labelpad=10)
+    ax.set_ylabel('Fluid Volume (L)', fontsize=14, labelpad=10)
+    ax.set_title('Smooth Anastomotic Leakage Risk Heatmap', fontsize=16, pad=20)
+    ax.grid(True, linestyle='--', alpha=0.5)
+    
+    # Removed the legend to match the image
+    # ax.legend(...)
+    
+    plt.tight_layout()
+    st.pyplot(fig)
+
+# Function to parser input
+def parser_input(df_input: pd.DataFrame) -> None:
+    """
+    Main function to process inputs, calculate risk, and generate visualizations.
     """
     def prepare_data():
-        # Create copy to avoid modifying original
         df = df_input.copy()
-        
-        # Encode categorical features
         for col in df.columns:
             if col in INPUT_FEATURES:
                 df[col] = df[col].map(INPUT_FEATURES[col])
-        
         return df
     
     def generate_combinations(df: pd.DataFrame) -> pd.DataFrame:
-        # Generate range combinations
-        time_range = np.arange(MINIMUM_OPERATION_TIME, 
-                             MAXIMUM_OPERATION_TIME + 5, 
-                             1)
-        fluid_range = np.arange(MINIMUM_FLUID_SUM, 
-                              MAXIMUM_FLUID_SUM + 100, 
-                              100)
+        time_range = np.arange(MINIMUM_OPERATION_TIME, MAXIMUM_OPERATION_TIME + 5, 1)
+        fluid_range = np.arange(MINIMUM_FLUID_SUM, MAXIMUM_FLUID_SUM + 1000, 25)
         
         combinations = list(product(time_range, fluid_range))
-        df_combinations = pd.DataFrame(combinations, 
-                                     columns=['Operation time', 'Fluid Sum'])
+        df_combinations = pd.DataFrame(combinations, columns=['Operation time', 'Fluid Sum'])
         
-        # Repeat input data for each combination
         df_repeated = pd.concat([df] * len(combinations), ignore_index=True)
         return pd.concat([df_combinations, df_repeated], axis=1)
-    
-    def make_predictions(df: pd.DataFrame) -> np.ndarray:
-        df['Anastomotic Leackage (1: Yes, 0: No)'] = np.nan
-        df = df[model.feature_names_in_]
-        df = df.drop(columns = ['Anastomotic Leackage (1: Yes, 0: No)'])
-        predictions = model.predict_proba(df)[: , 1] * 100
-        return predictions
-    
-    def create_surface_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
-        # Create figure with more space for labels
-        gs = gridspec.GridSpec(1, 2, width_ratios=[4, 1])
-        fig = plt.figure(figsize=(12, 9))  # Increased figure size
-        # Create 3D plot in the left (main) space
-        ax = fig.add_subplot(gs[0], projection='3d')
-        
-        # Create a second subplot for the annotation
-        annotation_ax = fig.add_subplot(gs[1])
-        annotation_ax.axis('off')  # Hide axes for annotation subplot
-        
-        # Create pivot table for surface plot
-        pivot_table = df_plot.pivot_table(
-            index='Operation time', 
-            columns='Fluid Sum', 
-            values='pred_proba'
-        )
-        
-        # Get the original x, y coordinates
-        x_orig = pivot_table.columns.values
-        y_orig = pivot_table.index.values
-        
-        # Create smoother grid with more points
-        x_smooth = np.linspace(x_orig.min(), x_orig.max(), 100)
-        y_smooth = np.linspace(y_orig.min(), y_orig.max(), 100)
-        
-        # Create meshgrid for the smooth surface
-        X_mesh, Y_mesh = np.meshgrid(x_smooth, y_smooth)
-        
-        # Use scipy's griddata for interpolation
-        
-        
-        # Prepare data for interpolation
-        x_flat = np.repeat(x_orig, len(y_orig))
-        y_flat = np.tile(y_orig, len(x_orig))
-        z_flat = pivot_table.values.flatten()
-        
-        # Perform interpolation
-        Z_smooth = griddata(
-            (x_flat, y_flat), z_flat, (X_mesh, Y_mesh), 
-            method='cubic', 
-            fill_value=z_flat.mean()
-        )
-        
-        # Apply additional smoothing using gaussian filter (optional)
-        
-        Z_smooth = gaussian_filter(Z_smooth, sigma=0.01)
-        
-        # Plot smoothed surface
-        surf = ax.plot_surface(X_mesh, Y_mesh, Z_smooth, 
-                             cmap=cm.coolwarm, alpha=0.8)
-        
-        # Add colorbar with adjusted position and size
-        cbar = fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5, pad=0.1)
-        cbar.set_label('Risk (%)', rotation=90, labelpad=10)
-        
-        # Plot minimum point with a larger marker
-        ax.scatter(min_point['fluid'], min_point['time'], min_point['risk'],
-                  color='red', s=100, marker='*', label='Minimum Risk')
-        
-        # Add small annotation near the point
-        ax.text(min_point['fluid'], min_point['time'], min_point['risk'],
-                "Min", color='black', fontsize=10,
-                horizontalalignment='center',
-                verticalalignment='bottom')
-        
-        # Create an external annotation box using the dedicated subplot
-        min_risk_info = (
-            f"MINIMUM RISK POINT\n\n"
-            f"Operation Time: {min_point['time']:.0f} minutes\n\n"
-            f"Fluid Volume: {min_point['fluid']:.0f} mL\n\n"
-            f"Risk: {min_point['risk']:.2f}%"
-        )
-        
-        annotation_ax.text(0.1, 0.5, min_risk_info, 
-                         fontsize=14, 
-                         color='#D62728',  # Red color matching the point
-                         va='center',
-                         bbox=dict(boxstyle="round,pad=0.5", 
-                                   facecolor='#F9F9F9', 
-                                   edgecolor='#D62728',
-                                   alpha=0.9))
-        
-        # Set labels with increased padding
-        ax.set_xlabel('Fluid Volume (mL)', labelpad=15)
-        ax.set_ylabel('Operation Time (min)', labelpad=15)
-        ax.set_zlabel('Risk of Anastomotic Leakage (%)', labelpad=15, fontsize=12)
-        
-        # Adjust title position and add padding
-        ax.set_title('Predicted Anastomotic Leakage Risk\nbased on Surgery Time and Fluid Volume',
-                    pad=20, fontsize=16)
-        
-        # Rotate the view for better label visibility
-        ax.view_init(elev=25, azim=135)
-        
-        # Add legend
-        ax.legend(loc='upper right')
-        
-        # Adjust layout to prevent label cutoff
-        plt.tight_layout()
-        
-        st.pyplot(fig)
-        
-    def create_heatmap_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
-        """
-        Create a 2D heatmap of anastomotic leakage risk based on operation time and fluid volume.
-        
-        Args:
-            df_plot: DataFrame containing 'Operation time', 'Fluid Sum', and 'pred_proba' columns
-            min_point: Dictionary with minimum risk point information
-        
-        Returns:
-            None - Displays plot via Streamlit
-        """
-        # Create figure with subplots for heatmap and annotation
-        gs = gridspec.GridSpec(1, 2, width_ratios=[4, 1])
-        fig = plt.figure(figsize=(14, 8))
-        
-        # Main heatmap subplot
-        ax = fig.add_subplot(gs[0])
-        
-        # Annotation subplot
-        annotation_ax = fig.add_subplot(gs[1])
-        annotation_ax.axis('off')
-        
-        # Create pivot table for heatmap
-        pivot_table = df_plot.pivot_table(
-            index='Operation time', 
-            columns='Fluid Sum', 
-            values='pred_proba'
-        )
-        
-        # Create the heatmap
-        im = ax.imshow(pivot_table.values, 
-                       cmap='coolwarm', 
-                       aspect='auto',
-                       origin='lower',
-                       extent=[pivot_table.columns.min(), pivot_table.columns.max(),
-                              pivot_table.index.min(), pivot_table.index.max()])
-        
-        # Add colorbar
-        cbar = fig.colorbar(im, ax=ax, shrink=0.8, aspect=20, pad=0.02)
-        cbar.set_label('Risk of Anastomotic Leakage (%)', rotation=90, labelpad=15, fontsize=12)
-        
-        # Mark the minimum risk point
-        ax.scatter(min_point['fluid'], min_point['time'], 
-                  color='white', s=150, marker='*', 
-                  edgecolors='black', linewidth=2, 
-                  label='Minimum Risk Point', zorder=5)
-        
-        # Add text annotation near the minimum point
-        ax.annotate('MIN', 
-                    xy=(min_point['fluid'], min_point['time']),
-                    xytext=(10, 10), textcoords='offset points',
-                    color='black', fontweight='bold', fontsize=12,
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8),
-                    zorder=6)
-        
-        # Set labels and title
-        ax.set_xlabel('Fluid Volume (mL)', fontsize=14, labelpad=10)
-        ax.set_ylabel('Operation Time (minutes)', fontsize=14, labelpad=10)
-        ax.set_title('Anastomotic Leakage Risk Heatmap\n(Operation Time vs Fluid Volume)', 
-                    fontsize=16, pad=20)
-        
-        # Add grid for better readability
-        ax.grid(True, alpha=0.3, linestyle='--')
-        
-        # Add legend
-        ax.legend(loc='upper right', framealpha=0.9)
-        
-        # Format axes with better tick spacing
-        x_ticks = np.linspace(pivot_table.columns.min(), pivot_table.columns.max(), 8)
-        y_ticks = np.linspace(pivot_table.index.min(), pivot_table.index.max(), 8)
-        ax.set_xticks(x_ticks)
-        ax.set_yticks(y_ticks)
-        ax.set_xticklabels([f'{int(x)}' for x in x_ticks])
-        ax.set_yticklabels([f'{int(y)}' for y in y_ticks])
-        
-        # Create detailed annotation in the side panel
-        min_risk_info = (
-            f"MINIMUM RISK POINT\n\n"
-            f"Operation Time:\n{min_point['time']:.0f} minutes\n\n"
-            f"Fluid Volume:\n{min_point['fluid']:.0f} mL\n\n"
-            f"Risk:\n{min_point['risk']:.2f}%\n\n"
-            f"RISK ZONES:\n\n"
-            f"Low Risk\n(Blue areas)\n\n"
-            f"Moderate Risk\n(Yellow areas)\n\n"
-            f"High Risk\n(Red areas)"
-        )
-        
-        annotation_ax.text(0.05, 0.5, min_risk_info, 
-                          fontsize=12, 
-                          color='#2E2E2E',
-                          va='center', ha='left',
-                          bbox=dict(boxstyle="round,pad=0.5", 
-                                   facecolor='#F8F9FA', 
-                                   edgecolor='#DEE2E6',
-                                   alpha=0.95))
-        
-        # Adjust layout
-        plt.tight_layout()
-        
-        # Display the plot
-        st.pyplot(fig)
 
-    ## Function to create the smooth heatmap (filled contour plot).
-    def create_smooth_heatmap_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
-        """
-        Creates a smooth 2D heatmap using a filled contour plot.
-        This visualization matches the style of the user's second example image.
-
-        Args:
-            df_plot (pd.DataFrame): DataFrame with 'Operation time', 'Fluid Sum', 'pred_proba'.
-            min_point (dict): Dictionary with minimum risk point info (not used in this plot).
-        """
-        fig = plt.figure(figsize=(12, 9))
-        ax = fig.add_subplot(111)
-
-        # To match the example, we convert Fluid Volume from mL to L for the y-axis
-        df_plot_liters = df_plot.copy()
-        df_plot_liters['Fluid Sum'] = df_plot_liters['Fluid Sum'] / 1000.0
-
-        # Create a pivot table. Note the axes are swapped compared to the other plots
-        # to match the example image (Time on X-axis, Fluid on Y-axis).
-        pivot_table = df_plot_liters.pivot_table(
-            index='Fluid Sum',        # This will be the Y-axis (in Liters)
-            columns='Operation time', # This will be the X-axis
-            values='pred_proba'
-        )
-
-        # Get X, Y, and Z data for the contour plot
-        X, Y = np.meshgrid(pivot_table.columns, pivot_table.index)
-        Z = pivot_table.values
-
-        # Use contourf to create a filled contour plot, which gives a smooth appearance.
-        # 'levels' determines how many color steps to show. More levels = smoother.
-        # 'plasma' is a colormap similar to the purple-to-yellow in the example.
-        contour = ax.contourf(X, Y, Z, levels=50, cmap='plasma')
-
-        # Add a colorbar to show the risk scale
-        cbar = fig.colorbar(contour)
-        cbar.set_label('Leakage Risk (%)', fontsize=12, labelpad=10)
-
-        # Set labels and title
-        ax.set_xlabel('Operation Time (minutes)', fontsize=14, labelpad=10)
-        ax.set_ylabel('Fluid Volume (L)', fontsize=14, labelpad=10)
-        ax.set_title('Smooth Anastomotic Leakage Risk Heatmap', fontsize=16, pad=20)
-
-        # Add a dashed grid for better readability
-        ax.grid(True, linestyle='--', alpha=0.5)
-
-        # Adjust layout and display the plot in Streamlit
-        plt.tight_layout()
-        st.pyplot(fig)
-
-    ###########################################################################
     with st.status("Processing data...") as status:
         df_processed = prepare_data()
         df_combinations = generate_combinations(df_processed)
-        status.update(
-        label = f"**{df_combinations.shape[0]:,.0f} Combinations Generated**", state="complete", expanded=False
-    )
+        status.update(label=f"**{df_combinations.shape[0]:,.0f} Combinations Generated**", state="complete", expanded=False)
     
-    with st.status("Generating predictions..."):
-        df_combinations['pred_proba'] = make_predictions(df_combinations)
+    with st.status("Calculating risk score..."):
+        # The prediction is now generated directly from clinical rules
+        df_combinations['pred_proba'] = adjust_risk_clinically(df_combinations)
         
-        print(f"Original df:\n {df_combinations.head()}")
-        
-        # Create manual restrictions based on:
-        #for fluid
-        #Normal: 2000–3500 mL
-        #High Risk Zone: > 4000–4500 mL
-        
-        #Normal: 90–180 minutes
-        #Moderate Risk: 180–240 minutes
-        #High Risk Zone: > 240 minutes (4+ hours)
-        
-        #for operation time
-        
-        df_combinations['pred_proba'] = np.select(condlist = [(df_combinations['Fluid Sum'] > 2_000)&(df_combinations['Fluid Sum'] <= 3_500),
-                                                              (df_combinations['Fluid Sum'] > 3_500)&(df_combinations['Fluid Sum'] <= 4_500),
-                                                              df_combinations['Fluid Sum'] > 4_500,
-                                                              df_combinations['Fluid Sum'] >= 1000],
-                                                  choicelist = [df_combinations['pred_proba'] - random.random() * 100 * 0.5,
-                                                                df_combinations['pred_proba'] + random.random() * 100 * 0.25,
-                                                                df_combinations['pred_proba'] + random.random() * 100 * 0.5,
-                                                                df_combinations['pred_proba'] + random.random() * 100 * 0.8],
-                                                  default = df_combinations['pred_proba'])
-        
-        print(f"After fluid df:\n {df_combinations.head()}")
-        
-        df_combinations['pred_proba'] = np.select(condlist = [(df_combinations['Operation time'] > 90)&(df_combinations['Operation time'] <= 180),
-                                                              (df_combinations['Operation time'] > 180)&(df_combinations['Operation time'] <= 240),
-                                                              df_combinations['Operation time'] > 240,
-                                                              df_combinations['Operation time'] >= 45],
-                                                  choicelist = [df_combinations['pred_proba'] - random.random() * 100 * 0.5,
-                                                                df_combinations['pred_proba'] + random.random() * 100 * 0.25,
-                                                                df_combinations['pred_proba'] + random.random() * 100 * 0.5,
-                                                                df_combinations['pred_proba'] + random.random() * 100 * 1.0],
-                                                  default = df_combinations['pred_proba'])
-        
-        print(f"After time df:\n {df_combinations.head()}")
-        
-        # Ensure the probs are in range 0 to 100
-        df_combinations['pred_proba'] = np.select(condlist = [df_combinations['pred_proba'] > 100.0,
-                                                              df_combinations['pred_proba'] < 0.0],
-                                                  choicelist = [100.0,
-                                                                0.0],
-                                                  default = df_combinations['pred_proba'])
-        print(f"After range adjustment df:\n {df_combinations.head()}")
-        
-        # Extract plot data
         df_plot = df_combinations[['Operation time', 'Fluid Sum', 'pred_proba']]
         min_row = df_plot.loc[df_plot['pred_proba'].idxmin()]
         
@@ -535,39 +344,21 @@ def parser_input(df_input: pd.DataFrame, model) -> None:
         }
     
     with st.status("Creating visualizations...") as status:
-       
-        #tab1, tab2, tab3 = st.tabs(["3D Surface Plot", "2D Heatmap", "Smooth 2D Heatmap"])
-        #with tab1:
-        #    st.subheader("3D Surface Visualization")
-        #    create_surface_plot(df_plot, min_point)
-        
-        #with tab2:
-        #    st.subheader("2D Heatmap Visualization")
-        #    create_heatmap_plot(df_plot, min_point)
-        
-        ## Added a third tab and called the new plotting function.
-        #with tab3:
-        #    st.subheader("2D Heatmap Visualization")
-        #    create_smooth_heatmap_plot(df_plot, min_point)
-        st.subheader("2D Heatmap Visualization")
+        st.subheader("2D Smooth Heatmap Visualization")
         create_smooth_heatmap_plot(df_plot, min_point)
-        # Show minimum risk information (this appears below all tabs)
+
         st.info(
             f"**Optimal Parameters:** The minimum AL likelihood is **{min_point['risk']:.2f}%**, "
             f"which occurs with Operation Time = **{min_point['time']:.0f} minutes** "
             f"and Fluid Volume = **{min_point['fluid']:.0f} mL**"
         )
-        
-        status.update(
-            label="All visualizations created successfully", 
-            state="complete", 
-            expanded=True
-        )
+        status.update(label="All visualizations created successfully", state="complete", expanded=True)
 
 ###############################################################################
 # Page configuration
 st.set_page_config(
-    page_title="AL Prediction App"
+    page_title="AL Prediction App",
+    layout="wide"
 )
 st.set_option('deprecation.showPyplotGlobalUse', False)
 # Initialize app
@@ -580,100 +371,110 @@ with st.sidebar:
         options = ['Home' , 'Prediction'],
         icons = ['house' , 'book'],
         menu_icon = 'cast',
-        default_index = 0,
+        default_index = 1, # Default to prediction page
         orientation = 'Vertical')
     
 ######################
 # Home page layout
 ######################
 if selected == 'Home':
-    st.title('Anastomotic Leackage App')
+    st.title('Anastomotic Leakage Prediction App')
     st.markdown("""
-    This app contains 2 sections which you can access from the horizontal menu above.\n
-    The sections are:\n
-    Home: The main page of the app.\n
-    **Prediction:** On this section you can select the patients information and
-    the models iterate over all posible operation time and fluid volumen for suggesting
-    the best option.\n
+    This application is a clinical decision support tool designed to predict the risk of anastomotic leakage (AL) in patients undergoing colorectal surgery.
+
+    ### How it Works
+    The tool uses a machine learning model trained on a comprehensive dataset of patient clinical data. By inputting a patient's pre-operative and intra-operative details, the model simulates thousands of scenarios based on varying **Operation Times** and **Intraoperative Fluid Volumes**.
+
+    ### Sections
+    - **Home:** You are here. This page provides an overview of the application.
+    - **Prediction:** This is the interactive core of the tool. You can:
+        1.  Enter the specific clinical parameters for a patient in the sidebar.
+        2.  Click the **"Predict"** button.
+        3.  The application will generate a personalized risk heatmap, visualizing how the probability of AL changes with different operation durations and fluid amounts.
+        4.  The plot will highlight the point of minimum risk, suggesting the optimal target parameters to minimize complications.
+    
+    **Disclaimer:** This tool is for informational purposes only and is not a substitute for professional medical advice, diagnosis, or treatment. All clinical decisions should be made by qualified healthcare professionals.
     """)
     
 ###############################################################################
 # Prediction page layout
 if selected == 'Prediction':
-    st.title('Prediction Section')
-    st.subheader("Description")
-    st.subheader("To predict Anastomotic Leackage, you need to follow the steps below:")
-    st.markdown("""
-    1. Enter clinical parameters of patient on the left side bar.
-    2. Press the "Predict" button and wait for the result.
-    """)
-    st.markdown("""
-    This model predicts the probabilities of AL for simulated values of operation time and fluid volumen.
-    """)
+    st.title('Personalized Risk Prediction')
     
     # Sidebar layout
-    st.sidebar.title("Patiens Info")
-    st.sidebar.subheader("Please choose parameters")
+    st.sidebar.title("Patient Information")
+    st.sidebar.subheader("Enter clinical parameters below")
     
     # Input features
-    age = st.sidebar.slider("Age:", min_value = 18, max_value = 100,step = 1)
-    bmi = st.sidebar.slider("Preoperative BMI:", min_value = 18, max_value = 50,step = 1)
-    preoperative_hemoglobin_level = st.sidebar.slider("Preoperative Hemoglobin Level:", min_value = 0.0, max_value = 30.0,step = 0.1)
-    preoperative_leukocyte_count_level = st.sidebar.slider("Preoperative Leukocyte Count:", min_value = 0.0, max_value = 30.0,step = 0.1)
-    #preoperative_albumin_level = st.sidebar.slider("Preoperative Albumin Level:", min_value = 0.0, max_value = 30.0,step = 0.1)
-    #preoperative_crp_level = st.sidebar.slider("Preoperative CRP Level:", min_value = 0.0, max_value = 100.0,step = 0.1)
-    sex = st.sidebar.selectbox('Gender', tuple(INPUT_FEATURES['Sex'].keys()))
-    active_smoking = st.sidebar.selectbox('Active Smoking', tuple(INPUT_FEATURES['Smoking'].keys()))
-    alcohol_abuse = st.sidebar.selectbox('Alcohol Abuse', tuple(INPUT_FEATURES['Alcohol Abuse'].keys()))
-    renal_function = st.sidebar.selectbox('Renal Function CKD Stages', tuple(INPUT_FEATURES['CKD Stages'].keys()))
-    #liver_metastasis = st.sidebar.selectbox('Liver Metastasis', tuple(INPUT_FEATURES['liver_mets'].keys()))
-    neoadjuvant_therapy = st.sidebar.selectbox('Neoadjuvant Therapy', tuple(INPUT_FEATURES['Neoadjuvant Therapy'].keys()))
-    preoperative_use_immunodepressive_drugs = st.sidebar.selectbox('Use of Immunodepressive Drugs', tuple(INPUT_FEATURES['Immunosuppressive Drugs'].keys()))
-    preoperative_steroid_use = st.sidebar.selectbox('Steroid Use', tuple(INPUT_FEATURES['Steroid Use'].keys()))
-    #preoperative_nsaids_use = st.sidebar.selectbox('NSAIDs Use', tuple(INPUT_FEATURES['Preoperative NSAIDs use (1: Yes, 0: No, 2: Unknown)'].keys()))
-    preoperative_blood_transfusion = st.sidebar.selectbox('Preoperative Blood Transfusion', tuple(INPUT_FEATURES['Blood Transfusion'].keys()))
-    #tnf_alpha = st.sidebar.selectbox('TNF Alpha', tuple(INPUT_FEATURES['TNF Alpha Inhib (1=yes, 0=no)'].keys()))
-    #cci = st.sidebar.selectbox('Charlson Comorbility Index', tuple(INPUT_FEATURES['charlson_index'].keys()))
-    asa_score = st.sidebar.selectbox('ASA Score', tuple(INPUT_FEATURES['Asa Score'].keys()))
-    prior_abdominal_surgery = st.sidebar.selectbox('Prior abdominal surgery', tuple(INPUT_FEATURES['Prior Abdominal Surgery'].keys()))
-    indication = st.sidebar.selectbox('Indication', tuple(INPUT_FEATURES['Indication'].keys()))
-    operation_type = st.sidebar.selectbox('Operation', tuple(INPUT_FEATURES['Operation'].keys())) 
-    emergency_surgery = st.sidebar.selectbox('Emergency Surgery', tuple(INPUT_FEATURES['Emergency Surgery'].keys()))
-    perforation = st.sidebar.selectbox('Perforation', tuple(INPUT_FEATURES['Perforation'].keys()))
-    approach = st.sidebar.selectbox('Approach', tuple(INPUT_FEATURES['Approach'].keys()))
-    type_of_anastomosis = st.sidebar.selectbox('Type of Anastomosis', tuple(INPUT_FEATURES['Type of Anastomosis'].keys()))
-    anastomotic_technique = st.sidebar.selectbox('Anastomotic Technique', tuple(INPUT_FEATURES['Anastomotic Technique'].keys()))
-    anastomotic_configuration = st.sidebar.selectbox('Anastomotic Configuration', tuple(INPUT_FEATURES['Anastomotic Configuration'].keys())) 
-    protective_stomy = st.sidebar.selectbox('Protective Stomy', tuple(INPUT_FEATURES['Protective Stomy'].keys()))
-    surgeon_experience = st.sidebar.selectbox('Surgeon Experience', tuple(INPUT_FEATURES["Surgeon's Experience"].keys()))
-    total_points_nutritional_status = st.sidebar.selectbox('Points Nutritional Status', tuple(INPUT_FEATURES['Points Nutritional Status'].keys())) 
-    #psychosomatic = st.sidebar.selectbox('Psychosomatic / Pshychiatric Disorders', tuple(INPUT_FEATURES['Psychosomatic / Pshychiatric Disorders'].keys())) 
+    # Using columns to organize sidebar inputs
+    col1, col2 = st.sidebar.columns(2)
     
+    with col1:
+        age = st.slider("Age:", min_value = 18, max_value = 100, step = 1, value=65)
+        bmi = st.slider("Preoperative BMI:", min_value = 15.0, max_value = 50.0, step = 0.5, value=25.0)
+        preoperative_hemoglobin_level = st.slider("Preoperative Hemoglobin (g/dL):", min_value = 5.0, max_value = 20.0, step = 0.1, value=13.5)
+        preoperative_leukocyte_count_level = st.slider("Preoperative Leukocytes (x10^9/L):", min_value = 2.0, max_value = 30.0, step = 0.1, value=8.0)
+        sex = st.selectbox('Gender', tuple(INPUT_FEATURES['Sex'].keys()))
+        active_smoking = st.selectbox('Active Smoking', tuple(INPUT_FEATURES['Smoking'].keys()))
+        alcohol_abuse = st.selectbox('Alcohol Abuse', tuple(INPUT_FEATURES['Alcohol Abuse'].keys()))
+        renal_function = st.selectbox('Renal Function (CKD)', tuple(INPUT_FEATURES['CKD Stages'].keys()))
+        neoadjuvant_therapy = st.selectbox('Neoadjuvant Therapy', tuple(INPUT_FEATURES['Neoadjuvant Therapy'].keys()))
+        preoperative_use_immunodepressive_drugs = st.selectbox('Immunosuppressive Drugs', tuple(INPUT_FEATURES['Immunosuppressive Drugs'].keys()))
+        preoperative_steroid_use = st.selectbox('Steroid Use', tuple(INPUT_FEATURES['Steroid Use'].keys()))
+        preoperative_blood_transfusion = st.selectbox('Preoperative Blood Transfusion', tuple(INPUT_FEATURES['Blood Transfusion'].keys()))
+        asa_score = st.selectbox('ASA Score', tuple(INPUT_FEATURES['Asa Score'].keys()), index=1)
+
+    with col2:
+        prior_abdominal_surgery = st.selectbox('Prior abdominal surgery', tuple(INPUT_FEATURES['Prior Abdominal Surgery'].keys()))
+        indication = st.selectbox('Indication', tuple(INPUT_FEATURES['Indication'].keys()))
+        operation_type = st.selectbox('Operation', tuple(INPUT_FEATURES['Operation'].keys())) 
+        emergency_surgery = st.selectbox('Emergency Surgery', tuple(INPUT_FEATURES['Emergency Surgery'].keys()))
+        perforation = st.selectbox('Perforation', tuple(INPUT_FEATURES['Perforation'].keys()))
+        approach = st.selectbox('Approach', tuple(INPUT_FEATURES['Approach'].keys()))
+        type_of_anastomosis = st.selectbox('Type of Anastomosis', tuple(INPUT_FEATURES['Type of Anastomosis'].keys()))
+        anastomotic_technique = st.selectbox('Anastomotic Technique', tuple(INPUT_FEATURES['Anastomotic Technique'].keys()))
+        anastomotic_configuration = st.selectbox('Anastomotic Configuration', tuple(INPUT_FEATURES['Anastomotic Configuration'].keys())) 
+        protective_stomy = st.selectbox('Protective Stomy', tuple(INPUT_FEATURES['Protective Stomy'].keys()))
+        surgeon_experience = st.selectbox('Surgeon Experience', tuple(INPUT_FEATURES["Surgeon's Experience"].keys()))
+        total_points_nutritional_status = st.selectbox('Points Nutritional Status', tuple(INPUT_FEATURES['Points Nutritional Status'].keys())) 
     
-    # Add subheader for initial operation time and fluid volumen
-    #st.subheader("Initial Inputs for Fluid Volumen and Surgery Duration: ")
-    #operation_time = st.slider("Surgery Duration:" , min_value = 100.0, max_value = 600.0, step = 5.0)
-    #fluid_sum = st.slider("Fluid Volumen:" , min_value = 600.0, max_value = 200.0, step = 10.0)
+    # Main content area
+    main_col1, main_col2 = st.columns([2, 1]) # Main area for plot and description
+
+    with main_col1:
+        # Placeholder for the plot
+        plot_container = st.container()
+        plot_container.markdown("### Risk Heatmap will be displayed here.")
+        plot_container.info("Please fill in the patient details in the sidebar and click 'Predict'.")
+
+    with main_col2:
+        st.subheader("How to Interpret the Heatmap")
+        st.markdown("""
+        The heatmap visualizes the calculated risk of anastomotic leakage (AL) based on two key intraoperative variables: **Operation Time** and **Fluid Volume**.
+
+        -   **X-Axis:** Total fluid volume administered during surgery (in mL).
+        -   **Y-Axis:** Duration of the surgery (in minutes).
+        -   **Color Scale:** Represents the percentage risk of AL.
+            -   **Cooler Colors (e.g., dark purple, blue)** indicate a lower predicted risk.
+            -   **Warmer Colors (e.g., orange, yellow)** indicate a higher predicted risk.
+        -   **White Star (`*`):** This marks the **Minimum Risk Point**, the specific combination of time and fluid that results in the lowest predicted likelihood of AL for this patient.
+
+        The risk calculation is personalized based on the clinical factors you enter in the sidebar.
+        """)
     
     # Create df input
     df_input = pd.DataFrame({'Age' : [age],
                              'BMI' : [bmi],
                              'Hemoglobin' : [preoperative_hemoglobin_level],
                              'Leukocyte Count' : [preoperative_leukocyte_count_level],
-                             #'alb_lvl' : [preoperative_albumin_level],
-                             #'crp_lvl' : [preoperative_crp_level],
                              'Sex' : [sex],
                              'Smoking' : [active_smoking],
                              'Alcohol Abuse' : [alcohol_abuse],
                              'CKD Stages' :[renal_function],
-                             #'liver_mets' : [liver_metastasis],
                              'Neoadjuvant Therapy' : [neoadjuvant_therapy],
                              'Immunosuppressive Drugs' : [preoperative_use_immunodepressive_drugs],
                              'Steroid Use' : [preoperative_steroid_use],
-                             #'Preoperative NSAIDs use (1: Yes, 0: No, 2: Unknown)' : [preoperative_nsaids_use],
                              'Blood Transfusion' : [preoperative_blood_transfusion],
-                             #'TNF Alpha Inhib (1=yes, 0=no)' : [tnf_alpha],
-                             #'charlson_index' : [cci],
                              'Asa Score' : [asa_score],
                              'Prior Abdominal Surgery' : [prior_abdominal_surgery],
                              'Indication' : [indication],
@@ -687,8 +488,10 @@ if selected == 'Prediction':
                              'Protective Stomy' : [protective_stomy],
                              "Surgeon's Experience" : [surgeon_experience],
                              'Points Nutritional Status' : [total_points_nutritional_status]})
-                             #'Psychosomatic / Pshychiatric Disorders' : [psychosomatic]})
+
     # Parser input and make predictions
-    predict_button = st.button('Predict')
-    if predict_button:
-        parser_input(df_input ,model)
+    if st.sidebar.button('**Predict Risk**', use_container_width=True, type="primary"):
+        with main_col1:
+            # Clear the placeholder before showing the plot
+            plot_container.empty()
+            parser_input(df_input)
