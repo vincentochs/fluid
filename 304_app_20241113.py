@@ -76,8 +76,8 @@ INPUT_FEATURES = {'Sex' : {'Male' : 1,
                   'charlson_index' : {str(i) : i for i in range(17)},
                   'Asa Score':  {'1: Healthy Person' : 1,
                            '2: Mild Systemic disease' : 2,
-                           '3: Severe syatemic disease' : 3,
-                           '4: Severe systemic disease that is a constan threat to life' : 4,
+                           '3: Severe systemic disease' : 3,
+                           '4: Severe systemic disease that is a constant threat to life' : 4,
                            '5: Moribund person' : 5,
                            '6: Unkonw' : 6},
                   'Prior Abdominal Surgery' : {'Yes' : 1,
@@ -119,7 +119,7 @@ INPUT_FEATURES = {'Sex' : {'Male' : 1,
                                     'No' : 0},
                   'Approach' : {'1: Laparoscopic' : 1 ,
                                         '2: Robotic' : 2 ,
-                                        '3: Open to open' : 3,
+                                        '3: Open' : 3,
                                         '4: Conversion to open' : 4,
                                         '5: Conversion to laparoscopy' : 5},
                   'Type of Anastomosis': {'Colon anastomosis' : 1,
@@ -148,7 +148,8 @@ INPUT_FEATURES = {'Sex' : {'Male' : 1,
                   'Points Nutritional Status' :  {str(i) : i for i in range(7)},
                   'Psychosomatic / Pshychiatric Disorders' : {'Yes' : 1,
                                                               'No' : 0}}
-
+inverse_dictionary = {feature: {v: k for k, v in mapping.items()} 
+                      for feature, mapping in INPUT_FEATURES.items()}
 ###############################################################################
 # Section when the app initialize and load the required information
 @st.cache_data() # We use this decorator so this initialization doesn't run every time the user change into the page
@@ -246,62 +247,66 @@ def adjust_risk_clinically(df_patient_data: pd.DataFrame) -> np.ndarray:
 
     return final_predictions
 
-# MODIFICATION: Plot is cleaned up to match the reference image (no marker, no legend).
+# MODIFICATION: This function has been updated to produce a much smoother heatmap.
 def create_smooth_heatmap_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
     """
-    Creates a highly smooth 2D heatmap using interpolation and a Gaussian filter.
-    The style is adjusted to match the user's reference image.
+    Creates a highly smooth 2D heatmap using interpolation, a strong Gaussian filter,
+    and pcolormesh rendering to match the user's reference image.
     """
-    fig, ax = plt.subplots(figsize=(12, 9))
+    fig, ax = plt.subplots(figsize=(10, 8))
 
+    # Convert fluid from mL to Liters for the plot's y-axis
     df_plot_liters = df_plot.copy()
     df_plot_liters['Fluid Sum'] = df_plot_liters['Fluid Sum'] / 1000.0
 
+    # Create a pivot table to structure the data in a grid
     pivot_table = df_plot_liters.pivot_table(
         index='Fluid Sum',
         columns='Operation time',
         values='pred_proba'
     )
 
+    # Original data coordinates from the pivot table
     x_orig = pivot_table.columns.values
     y_orig = pivot_table.index.values
     z_orig = pivot_table.values
 
-    x_smooth = np.linspace(x_orig.min(), x_orig.max(), 1000)
-    y_smooth = np.linspace(y_orig.min(), y_orig.max(), 1000)
+    # Create a higher-resolution grid for the smooth plot
+    x_smooth = np.linspace(x_orig.min(), x_orig.max(), 500)
+    y_smooth = np.linspace(y_orig.min(), y_orig.max(), 500)
     X_mesh, Y_mesh = np.meshgrid(x_smooth, y_smooth)
 
-    # Check if there's enough data to interpolate
-    if len(x_orig) > 3 and len(y_orig) > 3:
-        Z_smooth = griddata(
-            (np.repeat(x_orig, len(y_orig)), np.tile(y_orig, len(x_orig))),
-            z_orig.flatten(),
-            (X_mesh, Y_mesh),
-            method='cubic'
-        )
-        Z_smooth = gaussian_filter(Z_smooth, sigma=3)
-    else:
-        # Fallback for less data, just use the meshgrid
-        Z_smooth = np.tile(z_orig, (len(y_smooth), len(x_smooth)))
+    # Interpolate the original data onto the new high-resolution grid.
+    # The 'cubic' method helps create smooth transitions.
+    Z_interpolated = griddata(
+        (np.repeat(x_orig, len(y_orig)), np.tile(y_orig, len(x_orig))),
+        z_orig.flatten(),
+        (X_mesh, Y_mesh),
+        method='cubic'
+    )
 
+    # Apply a strong Gaussian filter to the interpolated data. This is the key
+    # step to blurring the colors and achieving the desired smoothness.
+    # A larger sigma value creates a more pronounced smoothing effect.
+    Z_smoothed = gaussian_filter(np.nan_to_num(Z_interpolated), sigma=35)
 
-    contour = ax.contourf(X_mesh, Y_mesh, Z_smooth, levels=100, cmap='plasma')
-    cbar = fig.colorbar(contour)
-    cbar.set_label('Anastomotic Leakage Risk (%)', fontsize=12, labelpad=10)
+    # Use pcolormesh for a smooth, continuous heatmap. 'gouraud' shading
+    # interpolates colors between grid points, which is ideal for this purpose.
+    mesh = ax.pcolormesh(X_mesh, Y_mesh, Z_smoothed, cmap='plasma', shading='gouraud')
     
-    # Removed the scatter plot for the minimum point to match the image
-    # ax.scatter(...)
+    # Add a color bar to show the risk scale
+    cbar = fig.colorbar(mesh, ax=ax)
+    cbar.set_label('Anastomotic Leakage Risk (%)', fontsize=12, labelpad=10)
 
+    # Set labels, title, and grid styling to match the reference image
     ax.set_xlabel('Operation Time (minutes)', fontsize=14, labelpad=10)
     ax.set_ylabel('Fluid Volume (L)', fontsize=14, labelpad=10)
     ax.set_title('Smooth Anastomotic Leakage Risk Heatmap', fontsize=16, pad=20)
-    ax.grid(True, linestyle='--', alpha=0.5)
-    
-    # Removed the legend to match the image
-    # ax.legend(...)
+    ax.grid(True, linestyle='--', alpha=0.6, color='white') # White grid for better contrast
     
     plt.tight_layout()
     st.pyplot(fig)
+
 
 # Function to parser input
 def parser_input(df_input: pd.DataFrame) -> None:
@@ -406,37 +411,178 @@ if selected == 'Prediction':
     st.sidebar.subheader("Enter clinical parameters below")
     
     # Input features
-    # Using columns to organize sidebar inputs
-    col1, col2 = st.sidebar.columns(2)
+    # Sidebar layout
+    st.sidebar.title("Patient Info")
+    st.sidebar.subheader("Please choose parameters")
     
-    with col1:
-        age = st.slider("Age:", min_value = 18, max_value = 100, step = 1, value=65)
-        bmi = st.slider("Preoperative BMI:", min_value = 15.0, max_value = 50.0, step = 0.5, value=25.0)
-        preoperative_hemoglobin_level = st.slider("Preoperative Hemoglobin (g/dL):", min_value = 5.0, max_value = 20.0, step = 0.1, value=13.5)
-        preoperative_leukocyte_count_level = st.slider("Preoperative Leukocytes (x10^9/L):", min_value = 2.0, max_value = 30.0, step = 0.1, value=8.0)
-        sex = st.selectbox('Gender', tuple(INPUT_FEATURES['Sex'].keys()))
-        active_smoking = st.selectbox('Active Smoking', tuple(INPUT_FEATURES['Smoking'].keys()))
-        alcohol_abuse = st.selectbox('Alcohol Abuse', tuple(INPUT_FEATURES['Alcohol Abuse'].keys()))
-        renal_function = st.selectbox('Renal Function (CKD)', tuple(INPUT_FEATURES['CKD Stages'].keys()))
-        neoadjuvant_therapy = st.selectbox('Neoadjuvant Therapy', tuple(INPUT_FEATURES['Neoadjuvant Therapy'].keys()))
-        preoperative_use_immunodepressive_drugs = st.selectbox('Immunosuppressive Drugs', tuple(INPUT_FEATURES['Immunosuppressive Drugs'].keys()))
-        preoperative_steroid_use = st.selectbox('Steroid Use', tuple(INPUT_FEATURES['Steroid Use'].keys()))
-        preoperative_blood_transfusion = st.selectbox('Preoperative Blood Transfusion', tuple(INPUT_FEATURES['Blood Transfusion'].keys()))
-        asa_score = st.selectbox('ASA Score', tuple(INPUT_FEATURES['Asa Score'].keys()), index=1)
+    # MODIFICATION: Moved "Not Available" checkbox below each input feature
+    # The value will be set to -1 if the box is checked.
+    
+    # Sidebar layout
+    st.sidebar.title("Patient Info")
+    st.sidebar.subheader("Please choose parameters")
+    
+    # --- Numeric Inputs ---
+    
+    # Age
+    age_placeholder = st.sidebar.empty() # 1. Create a placeholder for the input widget.
+    age_na = st.sidebar.checkbox("Age: Not Available", key="age_na") # 2. Display the checkbox below the placeholder.
+    
+    if not age_na:
+        # 3. If unchecked, fill the placeholder with the number input.
+        age = age_placeholder.number_input("Age (Years):", step=1.0, value=40.0)
+    else:
+        # 4. If checked, the placeholder remains empty and we set the value.
+        age = -1
+    
+    # BMI
+    bmi_placeholder = st.sidebar.empty()
+    bmi_na = st.sidebar.checkbox("BMI: Not Available", key="bmi_na")
+    if not bmi_na:
+        bmi = bmi_placeholder.number_input("Preoperative BMI:", step=0.5, value=25.0)
+    else:
+        bmi = -1
+    
+    # Hemoglobin Level
+    hgb_lvl_placeholder = st.sidebar.empty()
+    hgb_lvl_na = st.sidebar.checkbox("Hemoglobin Level(g/dL): Not Available", key="hgb_lvl_na")
+    if not hgb_lvl_na:
+        preoperative_hemoglobin_level = hgb_lvl_placeholder.number_input("Hemoglobin Level (g/dL):", step=0.1, value=12.0)
+    else:
+        preoperative_hemoglobin_level = -1
+    
+    # White blood cell count
+    wbc_count_placeholder = st.sidebar.empty()
+    wbc_count_na = st.sidebar.checkbox("White blood cell count: Not Available", key="wbc_count_na")
+    if not wbc_count_na:
+        preoperative_leukocyte_count_level = wbc_count_placeholder.number_input("White blood cell count (WBC) (10³/µL):", step=0.1, value=7.0)
+    else:
+        preoperative_leukocyte_count_level = -1
+    
+    # Albumin Level
+    alb_lvl_placeholder = st.sidebar.empty()
+    alb_lvl_na = st.sidebar.checkbox("Albumin Level: Not Available", key="alb_lvl_na")
+    if not alb_lvl_na:
+        alb_lvl = alb_lvl_placeholder.number_input("Albumin Level (g/dL):", step=0.1, value=4.0)
+    else:
+        alb_lvl = -1
+    
+    # CRP Level
+    crp_lvl_placeholder = st.sidebar.empty()
+    crp_lvl_na = st.sidebar.checkbox("CRP Level: Not Available", key="crp_lvl_na")
+    if not crp_lvl_na:
+        crp_lvl = crp_lvl_placeholder.number_input("CRP Level (mg/L):", step=0.1, value=5.0)
+    else:
+        crp_lvl = -1
+    
+    # --- Selection Inputs ---
+    st.sidebar.markdown("---")
+    
+    # Sex
+    sex_placeholder = st.sidebar.empty()
+    sex_na = st.sidebar.checkbox("Sex: Not Available", key="sex_na")
+    if not sex_na:
+        sex = sex_placeholder.radio("Select Sex:", options=tuple(INPUT_FEATURES['Sex'].keys()))
+    else:
+        sex = -1
+    
+    # NOTE: Charlson Index already has 'Unknown' which maps to -1, so no NA box is needed.
+    charlson_index = st.sidebar.radio("Select Charlson Comorbidity Index (CCI):", options=tuple(INPUT_FEATURES['charlson_index'].keys()))
+    
+    # ASA Score
+    asa_score_placeholder = st.sidebar.empty()
+    asa_score_na = st.sidebar.checkbox("ASA Score: Not Available", key="asa_score_na")
+    if not asa_score_na:
+        asa_score = asa_score_placeholder.radio("Select ASA Score:", options=tuple(INPUT_FEATURES['Asa Score'].keys()))
+    else:
+        asa_score = -1
+    
+    # Indication
+    indication_placeholder = st.sidebar.empty()
+    indication_na = st.sidebar.checkbox("Indication: Not Available", key="indication_na")
+    if not indication_na:
+        indication = indication_placeholder.radio("Select Indication:", options=tuple(INPUT_FEATURES['Indication'].keys()))
+    else:
+        indication = -1
+    
+    # Operation
+    operation_placeholder = st.sidebar.empty()
+    operation_na = st.sidebar.checkbox("Operation: Not Available" , key = "operation_na")
+    if not operation_na:
+        operation_type = operation_placeholder.radio("Select Operation:", options=tuple(INPUT_FEATURES['Operation'].keys()))
+    else:
+        operation_type = -1
+    
+    # Approach
+    approach_placeholder = st.sidebar.empty()
+    approach_na = st.sidebar.checkbox("Approach: Not Available" , key = "approach_na")
+    if not approach_na:
+        approach = approach_placeholder.radio("Select Approach:", options=tuple(INPUT_FEATURES['Approach'].keys()))
+    else:
+        approach = -1
+    
+    # Anastomotic type
+    anast_type_placeholder = st.sidebar.empty()
+    anast_type_na = st.sidebar.checkbox("Anastomotic Type: Not Available" , key = "anast_type_na")
+    if not anast_type_na:
+        type_of_anastomosis = anast_type_placeholder.radio("Select Anastomotic Type:", options=tuple(INPUT_FEATURES['Type of Anastomosis'].keys()))
+    else:
+        type_of_anastomosis = -1
+        
+    # Anastomotic technique
+    anast_technique_placeholder = st.sidebar.empty()
+    anast_technique_na = st.sidebar.checkbox("Anastomotic Technique: Not Available" , key = "anast_technique_na")
+    if not anast_technique_na:
+        anastomotic_technique = anast_technique_placeholder.radio("Select Anastomotic Technique:", options=tuple(INPUT_FEATURES['Anastomotic Technique'].keys()))
+    else:
+        anastomotic_technique = -1
+        
+    # Anastomotic configuration
+    anast_config_placeholder = st.sidebar.empty()
+    anast_config_na = st.sidebar.checkbox("Anastomotic Configuration: Not Available" , key = "anast_config_na")
+    if not anast_config_na:
+        anastomotic_configuration = anast_config_placeholder.radio("Select Anastomotic Configuration:", options=tuple(INPUT_FEATURES['Anastomotic Configuration'].keys()))
+    else:
+        anastomotic_configuration = -1
+        
+    # Surgeon Experience
+    surgeon_exp_placeholder = st.sidebar.empty()
+    surgeon_exp_na = st.sidebar.checkbox("Surgeon Experience: Not Available" , key = "surgeon_exp_na")
+    if not surgeon_exp_na:
+        surgeon_experience = surgeon_exp_placeholder.radio("Select Surgeon Experience:", options=tuple(INPUT_FEATURES["Surgeon's Experience"].keys()))
+    else:
+        surgeon_experience = -1
+    
+    #  Nutritional Risk Screening
+    nutr_status_pts_placeholder = st.sidebar.empty()
+    nutr_status_pts_na = st.sidebar.checkbox("Nutritional Risk Screening: Not Available", key="nutr_status_pts_na")
+    if not nutr_status_pts_na:
+        total_points_nutritional_status = nutr_status_pts_placeholder.radio("Select Nutritional Risk Screening (NRS):", options=tuple(INPUT_FEATURES['Points Nutritional Status'].keys()))
+    else:
+        total_points_nutritional_status = -1
+    
 
-    with col2:
-        prior_abdominal_surgery = st.selectbox('Prior abdominal surgery', tuple(INPUT_FEATURES['Prior Abdominal Surgery'].keys()))
-        indication = st.selectbox('Indication', tuple(INPUT_FEATURES['Indication'].keys()))
-        operation_type = st.selectbox('Operation', tuple(INPUT_FEATURES['Operation'].keys())) 
-        emergency_surgery = st.selectbox('Emergency Surgery', tuple(INPUT_FEATURES['Emergency Surgery'].keys()))
-        perforation = st.selectbox('Perforation', tuple(INPUT_FEATURES['Perforation'].keys()))
-        approach = st.selectbox('Approach', tuple(INPUT_FEATURES['Approach'].keys()))
-        type_of_anastomosis = st.selectbox('Type of Anastomosis', tuple(INPUT_FEATURES['Type of Anastomosis'].keys()))
-        anastomotic_technique = st.selectbox('Anastomotic Technique', tuple(INPUT_FEATURES['Anastomotic Technique'].keys()))
-        anastomotic_configuration = st.selectbox('Anastomotic Configuration', tuple(INPUT_FEATURES['Anastomotic Configuration'].keys())) 
-        protective_stomy = st.selectbox('Protective Stomy', tuple(INPUT_FEATURES['Protective Stomy'].keys()))
-        surgeon_experience = st.selectbox('Surgeon Experience', tuple(INPUT_FEATURES["Surgeon's Experience"].keys()))
-        total_points_nutritional_status = st.selectbox('Points Nutritional Status', tuple(INPUT_FEATURES['Points Nutritional Status'].keys())) 
+    # Binary options
+    st.sidebar.markdown("---")
+
+    st.sidebar.subheader("Medical Conditions (Yes/No):")
+    active_smoking = int(st.sidebar.checkbox("Smoking"))
+    active_smoking = inverse_dictionary['Smoking'][active_smoking]
+    neoadjuvant_therapy = int(st.sidebar.checkbox("Neoadjuvant Therapy"))
+    neoadjuvant_therapy = inverse_dictionary['Neoadjuvant Therapy'][neoadjuvant_therapy]
+    prior_abdominal_surgery = int(st.sidebar.checkbox("Prior abdominal surgery")) + 1
+    prior_abdominal_surgery = inverse_dictionary['Prior Abdominal Surgery'][prior_abdominal_surgery]
+    emergency_surgery = int(st.sidebar.checkbox("Emergency surgery"))
+    emergency_surgery = inverse_dictionary['Emergency Surgery'][emergency_surgery]
+    
+    # Default features the model use but are nto shown
+    alcohol_abuse = 'Yes'
+    renal_function = 'G5'
+    preoperative_use_immunodepressive_drugs = 'Yes'
+    preoperative_steroid_use = 'Yes'
+    preoperative_blood_transfusion = 'Yes'
+    perforation = 'Yes'
+    protective_stomy = 'Yes'
     
     # Main content area
     main_col1, main_col2 = st.columns([2, 1]) # Main area for plot and description
