@@ -38,6 +38,14 @@ MINIMUM_FLUID_SUM = 1_000
 MAXIMUM_OPERATION_TIME = 530
 MAXIMUM_FLUID_SUM = 8_000
 
+LOW_RISK_OPERATION_TIME = 60
+MEDIUM_RISK_OPERATION_TIME = 120
+HIGH_RISK_OPERATION_TIME = 360
+
+LOW_RISK_VOLUME = 2_000
+MEDIUM_RISK_VOLUME = 4_000
+HIGH_RISK_VOLUME = 6_000
+
 
 # Define dictionary for model inputs names
 INPUT_FEATURES = {'Sex' : {'Male' : 1,
@@ -234,12 +242,30 @@ def adjust_risk_clinically(df_patient_data: pd.DataFrame) -> np.ndarray:
     # Normalize time and fluid to a 0-1 scale based on their ranges
     time_norm = (op_time - MINIMUM_OPERATION_TIME) / (MAXIMUM_OPERATION_TIME - MINIMUM_OPERATION_TIME)
     fluid_norm = (fluid_sum - MINIMUM_FLUID_SUM) / (MAXIMUM_FLUID_SUM - MINIMUM_FLUID_SUM)
-
+    # Put risk from each value of operation time and fluid volume
+    risk_df['calculated_risk'] = np.select(condlist = [op_time <= LOW_RISK_OPERATION_TIME,
+                                                       op_time <= MEDIUM_RISK_OPERATION_TIME,
+                                                       op_time <= HIGH_RISK_OPERATION_TIME,
+                                                       op_time > HIGH_RISK_OPERATION_TIME],
+                        choicelist = [risk_df['calculated_risk'] + 0 * op_time * 2 / MAXIMUM_OPERATION_TIME,
+                                      risk_df['calculated_risk'] + 1 * op_time * 2 / MAXIMUM_OPERATION_TIME,
+                                      risk_df['calculated_risk'] + 2 * op_time * 2 / MAXIMUM_OPERATION_TIME,
+                                      risk_df['calculated_risk'] + 15 * op_time * 2 / MAXIMUM_OPERATION_TIME],
+                        default = risk_df['calculated_risk'])
+    risk_df['calculated_risk'] = np.select(condlist = [fluid_sum <= LOW_RISK_VOLUME,
+                                                       fluid_sum <= MEDIUM_RISK_VOLUME,
+                                                       fluid_sum <= HIGH_RISK_VOLUME,
+                                                       fluid_sum > HIGH_RISK_VOLUME],
+                        choicelist = [risk_df['calculated_risk'] + 0 * fluid_sum * 2 / MAXIMUM_FLUID_SUM,
+                                      risk_df['calculated_risk'] + 10 * fluid_sum * 2 / MAXIMUM_FLUID_SUM,
+                                      risk_df['calculated_risk'] + 20 * fluid_sum * 2 / MAXIMUM_FLUID_SUM,
+                                      risk_df['calculated_risk'] + 40 * fluid_sum * 2 / MAXIMUM_FLUID_SUM],
+                        default = risk_df['calculated_risk'])
+    
     # Add risk based on the normalized values, distributing the dynamic range
-    risk_df['calculated_risk'] += (time_norm * max_dynamic_risk * 0.5)
-    risk_df['calculated_risk'] += (fluid_norm * max_dynamic_risk * 0.5)
+    #risk_df['calculated_risk'] += (time_norm * max_dynamic_risk * 0.1)
+    #risk_df['calculated_risk'] += (fluid_norm * max_dynamic_risk * 1.9)
 
-    # --- Finalize ---
     # Ensure probabilities are capped to match the visual range of the example image.
     final_predictions = np.clip(risk_df['calculated_risk'].values, 0.0, 95.0)
 
@@ -247,7 +273,7 @@ def adjust_risk_clinically(df_patient_data: pd.DataFrame) -> np.ndarray:
 
     return final_predictions
 
-# MODIFICATION: This function has been updated to produce a much smoother heatmap.
+# This function has been updated to produce a much smoother heatmap.
 def create_smooth_heatmap_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
     """
     Creates a highly smooth 2D heatmap using interpolation, a strong Gaussian filter,
@@ -263,9 +289,10 @@ def create_smooth_heatmap_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
     pivot_table = df_plot_liters.pivot_table(
         index='Fluid Sum',
         columns='Operation time',
-        values='pred_proba'
+        values='pred_proba',
+        aggfunc = 'sum'
     )
-
+    
     # Original data coordinates from the pivot table
     x_orig = pivot_table.columns.values
     y_orig = pivot_table.index.values
@@ -289,10 +316,11 @@ def create_smooth_heatmap_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
     # step to blurring the colors and achieving the desired smoothness.
     # A larger sigma value creates a more pronounced smoothing effect.
     Z_smoothed = gaussian_filter(np.nan_to_num(Z_interpolated), sigma=35)
+    Z_smoothed = gaussian_filter(np.nan_to_num(pivot_table.values), sigma=35)
 
     # Use pcolormesh for a smooth, continuous heatmap. 'gouraud' shading
     # interpolates colors between grid points, which is ideal for this purpose.
-    mesh = ax.pcolormesh(X_mesh, Y_mesh, Z_smoothed, cmap='plasma', shading='gouraud')
+    mesh = ax.pcolormesh(x_orig, y_orig, Z_smoothed, cmap='plasma', shading='gouraud')
     
     # Add a color bar to show the risk scale
     cbar = fig.colorbar(mesh, ax=ax)
@@ -301,7 +329,7 @@ def create_smooth_heatmap_plot(df_plot: pd.DataFrame, min_point: dict) -> None:
     # Set labels, title, and grid styling to match the reference image
     ax.set_xlabel('Operation Time (minutes)', fontsize=14, labelpad=10)
     ax.set_ylabel('Fluid Volume (L)', fontsize=14, labelpad=10)
-    ax.set_title('Smooth Anastomotic Leakage Risk Heatmap', fontsize=16, pad=20)
+    ax.set_title('Anastomotic Leakage Risk Heatmap', fontsize=16, pad=20)
     ax.grid(True, linestyle='--', alpha=0.6, color='white') # White grid for better contrast
     
     plt.tight_layout()
