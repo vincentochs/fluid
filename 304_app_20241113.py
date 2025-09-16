@@ -514,8 +514,7 @@ if selected == 'Prediction':
     else:
         sex = -1
     
-    # NOTE: Charlson Index already has 'Unknown' which maps to -1, so no NA box is needed.
-    charlson_index = st.sidebar.radio("Select Charlson Comorbidity Index (CCI):", options=tuple(INPUT_FEATURES['charlson_index'].keys()))
+    
     
     # ASA Score
     asa_score_placeholder = st.sidebar.empty()
@@ -612,6 +611,134 @@ if selected == 'Prediction':
     perforation = 'Yes'
     protective_stomy = 'Yes'
     
+    # CCI Section
+    #the CCI is calculated in that way:
+    #Myocardial infarct (+1)
+    #ongestive heart failure (+1)
+    #Peripheral vascular disease (+1)
+    #Cerebrovascular disease (except hemiplegia) (+1)
+    #Dementia (+1)
+    #Chronic pulmonary disease (+1)
+    #Connective tissue disease (+1)
+    #Ulcer disease (+1)
+    #Mild liver disease (+1)
+    #Diabetes (without complications) (+1)
+    #Diabetes with end organ damage (+2)
+    #Hemiplegia (+2)
+    #Moderate or severe renal disease (+2)
+    #Solid tumor (non metastatic) (+2)
+    #Leukemia (+2)
+    #Lymphoma, Multiple myeloma (+2)
+    #Moderate or severe liver disease (+3)
+    #Metastatic solid tumor(+6)
+    #AIDS (+6)
+    #and then it takes age
+    #50 - 59 (+1)
+    #60 - 69 (+2)
+    #70 - 79 (+3)
+    #80 - 89 (+4)
+    #90 - 99 (+5)
+    
+    st.sidebar.markdown("---")
+
+    st.sidebar.subheader("Charlson Comorbility Index (CCI) Components (Yes/No):")
+    
+    # Basic conditions (+1 each)
+    cci_myocardial_infarct = int(st.sidebar.checkbox("Myocardial Infarct"))
+    cci_congestive_heart_failure = int(st.sidebar.checkbox("Congestive Heart Failure"))
+    cci_peripheral_vascular_disease = int(st.sidebar.checkbox("Peripheral Vascular Disease"))
+    cci_dementia = int(st.sidebar.checkbox("Dementia"))
+    cci_chronic_pulmonary_disease = int(st.sidebar.checkbox("Chronic Pulmonary Disease"))
+    cci_connective_tissue_disease = int(st.sidebar.checkbox("Connective Tissue Disease"))
+    cci_ulcer_disease = int(st.sidebar.checkbox("Ulcer Disease"))
+    
+    # Mutually exclusive conditions: Cerebrovascular disease vs Hemiplegia
+    st.sidebar.markdown("**Cerebrovascular Conditions** (Select only one):")
+    cci_cerebrovascular_disease = int(st.sidebar.checkbox("Cerebrovascular disease (except hemiplegia)"))
+    cci_hemiplegia = int(st.sidebar.checkbox("Hemiplegia"))
+    
+    # Handle mutual exclusion: Cerebrovascular vs Hemiplegia
+    if cci_cerebrovascular_disease and cci_hemiplegia:
+        st.sidebar.warning("⚠️ Cannot select both Cerebrovascular disease and Hemiplegia. Hemiplegia takes precedence.")
+        cci_cerebrovascular_disease = 0
+    
+    # Mutually exclusive conditions: Liver disease
+    st.sidebar.markdown("**Liver Disease** (Select only one):")
+    cci_mild_liver_disease = int(st.sidebar.checkbox("Mild Liver Disease"))
+    cci_moderate_severe_liver_disease = int(st.sidebar.checkbox("Moderate or Severe Liver Disease"))
+    
+    # Handle mutual exclusion: Liver disease
+    if cci_mild_liver_disease and cci_moderate_severe_liver_disease:
+        st.sidebar.warning("⚠️ Cannot select both Mild and Moderate/Severe Liver Disease. Moderate/Severe takes precedence.")
+        cci_mild_liver_disease = 0
+    
+    # Mutually exclusive conditions: Diabetes
+    st.sidebar.markdown("**Diabetes** (Select only one):")
+    cci_diabetes_without_complications = int(st.sidebar.checkbox("Diabetes (without complications)"))
+    cci_diabetes_with_end_organ_damage = int(st.sidebar.checkbox("Diabetes (with end organ damage)"))
+    
+    # Handle mutual exclusion: Diabetes
+    if cci_diabetes_without_complications and cci_diabetes_with_end_organ_damage:
+        st.sidebar.warning("⚠️ Cannot select both types of Diabetes. Diabetes with end organ damage takes precedence.")
+        cci_diabetes_without_complications = 0
+    
+    # Mutually exclusive conditions: Solid tumor
+    st.sidebar.markdown("**Solid Tumor** (Select only one):")
+    cci_solid_tumor = int(st.sidebar.checkbox("Solid Tumor (non metastatic)"))
+    cci_metastatic_solid_tumor = int(st.sidebar.checkbox("Metastatic Solid Tumor"))
+    
+    # Handle mutual exclusion: Solid tumor
+    if cci_solid_tumor and cci_metastatic_solid_tumor:
+        st.sidebar.warning("⚠️ Cannot select both non-metastatic and metastatic solid tumor. Metastatic takes precedence.")
+        cci_solid_tumor = 0
+    
+    # Other high-scoring conditions
+    st.sidebar.markdown("**Other Conditions:**")
+    cci_moderate_severe_renal_disease = int(st.sidebar.checkbox("Moderate or Severe Renal Disease"))
+    cci_leukemia = int(st.sidebar.checkbox("Leukemia"))
+    cci_lymphoma = int(st.sidebar.checkbox("Lymphoma, Multiple Myeloma"))
+    cci_aids = int(st.sidebar.checkbox("AIDS"))
+    
+    if age > 90:
+        cci_age = 5
+    if age <= 89:
+        cci_age = 4
+    if age <= 79:
+        cci_age = 3
+    if age <= 69:
+        cci_age = 2
+    if age <= 59:
+        cci_age = 1
+    
+    # Calculate Charlson Index
+    charlson_index = (
+        1 * cci_myocardial_infarct + 
+        1 * cci_congestive_heart_failure + 
+        1 * cci_peripheral_vascular_disease + 
+        1 * cci_cerebrovascular_disease + 
+        1 * cci_dementia + 
+        1 * cci_chronic_pulmonary_disease + 
+        1 * cci_connective_tissue_disease + 
+        1 * cci_ulcer_disease + 
+        1 * cci_mild_liver_disease + 
+        1 * cci_diabetes_without_complications + 
+        2 * cci_diabetes_with_end_organ_damage + 
+        2 * cci_hemiplegia + 
+        2 * cci_moderate_severe_renal_disease + 
+        2 * cci_solid_tumor + 
+        2 * cci_leukemia + 
+        2 * cci_lymphoma + 
+        3 * cci_moderate_severe_liver_disease + 
+        6 * cci_metastatic_solid_tumor + 
+        6 * cci_aids + 
+        cci_age
+    )
+    # Display current CCI score
+    st.sidebar.markdown("---")
+    st.sidebar.markdown(f"### Current Charlson Comorbidity Index")
+    st.sidebar.markdown(f"**Total CCI Score: {charlson_index}**")
+    st.sidebar.markdown(f"*Age contribution: {cci_age} points*")
+    charlson_index = str(charlson_index)
     # Main content area
     main_col1, main_col2 = st.columns([2, 1]) # Main area for plot and description
 
