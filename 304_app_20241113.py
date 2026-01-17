@@ -208,6 +208,27 @@ def adjust_risk_clinically(df_patient_data: pd.DataFrame) -> np.ndarray:
     asa_score = patient_info.get('Asa Score', 2)
     asa_risk = {1: -1, 2: 0, 3: 4, 4: 8, 5: 12, 6: 3}
     risk_df['calculated_risk'] += asa_risk.get(asa_score, 0)
+    
+    cci = patient_info.get('CCI', 0)
+    cci_normalized = cci / 36 # 36 is the maxium value of CCI
+    if cci_normalized > 0.9:
+        risk_df['calculated_risk'] += 10
+    elif cci_normalized > 0.8:
+        risk_df['calculated_risk'] += 9
+    elif cci_normalized > 0.7:
+        risk_df['calculated_risk'] += 8
+    elif cci_normalized > 0.6:
+        risk_df['calculated_risk'] += 7
+    elif cci_normalized > 0.5:
+        risk_df['calculated_risk'] += 6
+    elif cci_normalized > 0.4:
+        risk_df['calculated_risk'] += 5
+    elif cci_normalized > 0.3:
+        risk_df['calculated_risk'] += 4
+    elif cci_normalized > 0.2:
+        risk_df['calculated_risk'] += 3
+    elif cci_normalized > 0.1:
+        risk_df['calculated_risk'] += 2
 
     if patient_info.get('Smoking', 0) == 1:
         risk_df['calculated_risk'] += 3
@@ -231,36 +252,39 @@ def adjust_risk_clinically(df_patient_data: pd.DataFrame) -> np.ndarray:
         risk_df['calculated_risk'] += 1.5
 
     # --- Dynamic Factors (vary with each row for time and fluid) ---
-    op_time = df_patient_data['Operation time']
-    fluid_sum = df_patient_data['Fluid Sum']
+    # 1. Capture the baseline complexity of the patient
+    # We take the value from the first row since static factors are identical for all rows
+    patient_complexity = risk_df['calculated_risk'].iloc[0] 
+    
+    # 2. Define "Optimal" targets based on complexity
+    # Example logic: Sicker patients need more time (careful surgery) and slightly more fluid support
+    # You can tune the multipliers (e.g., * 4 or * 100) to fit your clinical experience
+    optimal_time = LOW_RISK_OPERATION_TIME + (patient_complexity * 4) 
+    optimal_fluid = LOW_RISK_VOLUME + (patient_complexity * 100)
 
     # The main gradient is driven by time and fluid.
     # Total dynamic range should be about 81 - 18 = 63 points.
     # We'll assign roughly half the range to each factor.
     max_dynamic_risk = 85.0
     
-    # Normalize time and fluid to a 0-1 scale based on their ranges
-    time_norm = (op_time - MINIMUM_OPERATION_TIME) / (MAXIMUM_OPERATION_TIME - MINIMUM_OPERATION_TIME)
-    fluid_norm = (fluid_sum - MINIMUM_FLUID_SUM) / (MAXIMUM_FLUID_SUM - MINIMUM_FLUID_SUM)
-    # Put risk from each value of operation time and fluid volume
-    risk_df['calculated_risk'] = np.select(condlist = [op_time <= LOW_RISK_OPERATION_TIME,
-                                                       op_time <= MEDIUM_RISK_OPERATION_TIME,
-                                                       op_time <= HIGH_RISK_OPERATION_TIME,
-                                                       op_time > HIGH_RISK_OPERATION_TIME],
-                        choicelist = [risk_df['calculated_risk'] + 0 * op_time * 2 / MAXIMUM_OPERATION_TIME,
-                                      risk_df['calculated_risk'] + 1 * op_time * 2 / MAXIMUM_OPERATION_TIME,
-                                      risk_df['calculated_risk'] + 2 * op_time * 2 / MAXIMUM_OPERATION_TIME,
-                                      risk_df['calculated_risk'] + 15 * op_time * 2 / MAXIMUM_OPERATION_TIME],
-                        default = risk_df['calculated_risk'])
-    risk_df['calculated_risk'] = np.select(condlist = [fluid_sum <= LOW_RISK_VOLUME,
-                                                       fluid_sum <= MEDIUM_RISK_VOLUME,
-                                                       fluid_sum <= HIGH_RISK_VOLUME,
-                                                       fluid_sum > HIGH_RISK_VOLUME],
-                        choicelist = [risk_df['calculated_risk'] + 0 * fluid_sum * 2 / MAXIMUM_FLUID_SUM,
-                                      risk_df['calculated_risk'] + 10 * fluid_sum * 2 / MAXIMUM_FLUID_SUM,
-                                      risk_df['calculated_risk'] + 20 * fluid_sum * 2 / MAXIMUM_FLUID_SUM,
-                                      risk_df['calculated_risk'] + 40 * fluid_sum * 2 / MAXIMUM_FLUID_SUM],
-                        default = risk_df['calculated_risk'])
+    # --- Dynamic Factors (vary with each row for time and fluid) ---
+    op_time = df_patient_data['Operation time']
+    fluid_sum = df_patient_data['Fluid Sum']
+
+    # 3. Apply penalty based on distance from the optimum (U-shaped curve)
+    # Using absolute difference (abs) or squared difference ensures risk rises 
+    # if values are too high OR too low.
+    
+    # Time Penalty weights
+    time_penalty_weight = 0.05  # Adjust this to make the gradient steeper/flatter
+    
+    # Fluid Penalty weights
+    fluid_penalty_weight = 0.002 # Adjust this (smaller because fluid values are large, e.g. 2000)
+
+    # Calculate deviation penalties
+    # We add this to the existing base risk
+    risk_df['calculated_risk'] += (np.abs(op_time - optimal_time) * time_penalty_weight)
+    risk_df['calculated_risk'] += (np.abs(fluid_sum - optimal_fluid) * fluid_penalty_weight)
     
     # Add risk based on the normalized values, distributing the dynamic range
     #risk_df['calculated_risk'] += (time_norm * max_dynamic_risk * 0.1)
@@ -738,7 +762,6 @@ if selected == 'Prediction':
     st.sidebar.markdown(f"### Current Charlson Comorbidity Index")
     st.sidebar.markdown(f"**Total CCI Score: {charlson_index}**")
     st.sidebar.markdown(f"*Age contribution: {cci_age} points*")
-    charlson_index = str(charlson_index)
     # Main content area
     main_col1, main_col2 = st.columns([2, 1]) # Main area for plot and description
 
@@ -788,7 +811,8 @@ if selected == 'Prediction':
                              'Anastomotic Configuration' : [anastomotic_configuration],
                              'Protective Stomy' : [protective_stomy],
                              "Surgeon's Experience" : [surgeon_experience],
-                             'Points Nutritional Status' : [total_points_nutritional_status]})
+                             'Points Nutritional Status' : [total_points_nutritional_status],
+                             'CCI' : [charlson_index]})
 
     # Parser input and make predictions
     if st.sidebar.button('**Predict Risk**', use_container_width=True, type="primary"):
