@@ -1,0 +1,3 @@
+fonts-liberation
+fontconfig
+fonts-freefont-ttf
