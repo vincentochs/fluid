@@ -250,6 +250,68 @@ def adjust_risk_clinically(df_patient_data: pd.DataFrame) -> np.ndarray:
 
     if patient_info.get("Surgeon's Experience", 1) == 2:
         risk_df['calculated_risk'] += 1.5
+        
+    approach = int(patient_info.get('Approach' , 1))
+    # Laparoscopic, 2: Robotic, 3: Open, 4: Conv to Open, 5: Conv to Lap
+    approach_risk = {1: 1.5, 2: 2.5, 3: 3.5, 4: 5.0, 5: 5.5}
+    risk_df['calculated_risk'] += approach_risk.get(approach, 1.5)
+    
+    # Higher risk for Ischemia (4), Perforation (9), and Inflammatory diseases (7,8)
+    indication = int(patient_info.get('Indication', 10))
+    indication_risk = {
+        1: 0,   # Recurrent Diverticulitis (Baseline)
+        2: 1,   # Acute Diverticulitis
+        3: 2,   # Ileus/Stenosis
+        4: 5,   # Ischemia (High Risk)
+        5: 2,   # Tumor
+        6: 3,   # Volvulus
+        7: 4,   # Morbus Crohn
+        8: 4,   # Colitis ulcerosa
+        9: 6,   # Perforation (Emergency/Septic context)
+        10: 1,  # Other
+        11: 2,  # Ileostoma reversal
+        12: 2   # Colostoma reversal
+    }
+    risk_df['calculated_risk'] += indication_risk.get(indication, 1)
+    
+    operation = int(patient_info.get('Operation', 1))
+    operation_risk = {
+        1: 2,   # Rectosigmoid
+        2: 2,   # Left hemi
+        3: 3,   # Extended left
+        4: 2,   # Right hemi
+        5: 3,   # Extended right
+        6: 3,   # Transverse
+        7: 4,   # Hartmann conversion
+        8: 1,   # Ileocaecal (Lower risk)
+        9: 4,   # Total colectomy
+        10: 3,  # High anterior
+        11: 6,  # Low anterior resection (Highest risk)
+        12: 5,  # Abdominoperineal
+        13: 2,  # Adhesiolysis + bowel
+        14: 1,  # Adhesiolysis only
+        15: 4,  # Hartmann resection
+        16: 2,  # Colon segment
+        17: 1   # Small bowel
+    }
+    risk_df['calculated_risk'] += operation_risk.get(operation, 2)
+    
+    # Type of Anastomosis (Colorectal/Ileorectal are riskier than Ileocolonic)
+    anast_type = int(patient_info.get('Type of Anastomosis', 1))
+    anast_type_risk = {1: 1, 2: 3, 3: 1, 4: 3, 5: 4, 6: 4, 7: 1, 8: 1}
+    risk_df['calculated_risk'] += anast_type_risk.get(anast_type, 1)
+    
+    # Anastomotic Technique (Hand-sewn or mixed often implies complexity)
+    anast_tech = int(patient_info.get('Anastomotic Technique', 1))
+    # 1: Stapler, 2: Hand-sewn, 3: Both
+    anast_tech_risk = {1: 0, 2: 1.5, 3: 2, 4: 1}
+    risk_df['calculated_risk'] += anast_tech_risk.get(anast_tech, 0)
+    
+    # Anastomotic Configuration (Minor impact relative to others)
+    anast_conf = int(patient_info.get('Anastomotic Configuration', 1))
+    # 1: End-End, 2: Side-End, 3: Side-Side, 4: End-Side
+    anast_conf_risk = {1: 0, 2: 0.5, 3: 0, 4: 0.5}
+    risk_df['calculated_risk'] += anast_conf_risk.get(anast_conf, 0)
 
     # --- Dynamic Factors (vary with each row for time and fluid) ---
     # 1. Capture the baseline complexity of the patient
