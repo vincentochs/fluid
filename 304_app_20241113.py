@@ -373,8 +373,8 @@ def parser_input(df_input: pd.DataFrame) -> None:
         return df
     
     def generate_combinations(df: pd.DataFrame) -> pd.DataFrame:
-        time_range = np.arange(MINIMUM_OPERATION_TIME, MAXIMUM_OPERATION_TIME + 5, 1)
-        fluid_range = np.arange(MINIMUM_FLUID_SUM, MAXIMUM_FLUID_SUM + 1000, 25)
+        time_range = np.arange(MINIMUM_OPERATION_TIME, MAXIMUM_OPERATION_TIME + 5, 10)
+        fluid_range = np.arange(MINIMUM_FLUID_SUM, MAXIMUM_FLUID_SUM + 100, 50)
         
         combinations = list(product(time_range, fluid_range))
         df_combinations = pd.DataFrame(combinations, columns=['Operation time', 'Fluid Sum'])
