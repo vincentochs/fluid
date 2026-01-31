@@ -156,6 +156,73 @@ INPUT_FEATURES = {'Sex' : {'Male' : 1,
                   'Points Nutritional Status' :  {str(i) : i for i in range(7)},
                   'Psychosomatic / Pshychiatric Disorders' : {'Yes' : 1,
                                                               'No' : 0}}
+
+# Define dictionary for model inputs names
+INPUT_FEATURES = {
+    'Sex': {'Male': 1, 'Female': 2},
+    'Smoking': {'Yes': 1, 'No': 0},
+    'Alcohol Abuse': {'<2 beverages/day': 1, '>= 2 beverages/day': 2, 'No alcohol abuse': 3, 'Unknown': 4},
+    'CKD Stages': {'G1': 1, 'G2': 2, 'G3a': 3, 'G3b': 4, 'G4': 5, 'G5': 6},
+    'liver_mets': {'Yes': 1, 'No': 2, 'Unknown': 3},
+    'Neoadjuvant Therapy': {'Yes': 1, 'No': 0},
+    'Immunosuppressive Drugs': {'Yes': 1, 'No': 0, 'Unknown': 2},
+    'Steroid Use': {'Yes': 1, 'No': 0, 'Unknown': 2},
+    'Preoperative NSAIDs use (1: Yes, 0: No, 2: Unknown)': {'Yes': 1, 'No': 0, 'Unknown': 2},
+    'Blood Transfusion': {'Yes': 1, 'No': 0, 'Unknown': 2},
+    'TNF Alpha Inhib (1=yes, 0=no)': {'Yes': 1, 'No': 0},
+    'charlson_index': {str(i): i for i in range(17)},
+    'Asa Score': {
+        '1: Healthy Person': 1,
+        '2: Mild Systemic disease': 2,
+        '3: Severe systemic disease': 3,
+        '4: Severe systemic disease that is a constant threat to life': 4,
+        '5: Moribund person': 5,
+        '6: Unknown': 6
+    },
+    'Prior Abdominal Surgery': {'Yes': 1, 'No': 2, 'Unknown': 3},
+    # --- UPDATED SECTIONS BELOW ---
+    'Indication': {
+        'Diverticulitis': 1,
+        'Tumor': 2,
+        'IBD': 3,
+        'Other': 4,
+        'Colostomy Reversal': 5
+    },
+    'Operation': {
+        'Rectosigmoid': 1,
+        'Left Hemicolectomy': 2,
+        'Right Hemicolectomy': 3,
+        'Transverse Colectomy': 4,
+        'Ileocaecal Resection': 5,
+        'Colon Segment Resection': 6
+    },
+    'Emergency Surgery': {'Yes': 1, 'No': 0, 'Unknown': 2},
+    'Perforation': {'Yes': 1, 'No': 0},
+    'Approach': {
+        'Laparoscopic': 1,
+        'Robotic': 2,
+        'Open': 3
+    },
+    'Type of Anastomosis': {
+        'Colon': 1,
+        'Ileocolonic': 2
+    },
+    'Anastomotic Technique': {
+        'Stapler': 1,
+        'Hand-Sewn': 2
+    },
+    'Anastomotic Configuration': {
+        'End to End': 1,
+        'Side to End': 2,
+        'Side to Side': 3,
+        'End to Side': 4
+    },
+    'Protective Stomy': {'Ileostomy': 1, 'Colostomy': 2, 'No protective stomy': 3, 'Unknown': 4},
+    "Surgeon's Experience": {'Consultant': 1, 'Teaching Operation': 2, 'Unknown': 3},
+    'Points Nutritional Status': {str(i): i for i in range(7)},
+    'Psychosomatic / Pshychiatric Disorders': {'Yes': 1, 'No': 0}
+}
+
 inverse_dictionary = {feature: {v: k for k, v in mapping.items()} 
                       for feature, mapping in INPUT_FEATURES.items()}
 ###############################################################################
@@ -251,60 +318,44 @@ def adjust_risk_clinically(df_patient_data: pd.DataFrame) -> np.ndarray:
     if patient_info.get("Surgeon's Experience", 1) == 2:
         risk_df['calculated_risk'] += 1.5
         
-    approach = int(patient_info.get('Approach' , 1))
-    # Laparoscopic, 2: Robotic, 3: Open, 4: Conv to Open, 5: Conv to Lap
-    approach_risk = {1: 1.5, 2: 2.5, 3: 3.5, 4: 5.0, 5: 5.5}
+    approach = int(patient_info.get('Approach', 1))
+    # Open surgery (3) carries higher risk than Minimally Invasive (1, 2)
+    approach_risk = {1: 1.5, 2: 1.5, 3: 4.5} 
     risk_df['calculated_risk'] += approach_risk.get(approach, 1.5)
     
-    # Higher risk for Ischemia (4), Perforation (9), and Inflammatory diseases (7,8)
-    indication = int(patient_info.get('Indication', 10))
+    # --- UPDATED: Indication (New IDs: 1=Div, 2=Tumor, 3=IBD, 4=Other, 5=Rev) ---
+    indication = int(patient_info.get('Indication', 2))
     indication_risk = {
-        1: 0,   # Recurrent Diverticulitis (Baseline)
-        2: 1,   # Acute Diverticulitis
-        3: 2,   # Ileus/Stenosis
-        4: 5,   # Ischemia (High Risk)
-        5: 2,   # Tumor
-        6: 3,   # Volvulus
-        7: 4,   # Morbus Crohn
-        8: 4,   # Colitis ulcerosa
-        9: 6,   # Perforation (Emergency/Septic context)
-        10: 1,  # Other
-        11: 2,  # Ileostoma reversal
-        12: 2   # Colostoma reversal
+        1: 1,   # Diverticulitis (Baseline)
+        2: 2,   # Tumor (Moderate)
+        3: 4,   # IBD (Higher risk due to tissue quality/inflammation)
+        4: 1,   # Other
+        5: 2    # Colostomy Reversal
     }
     risk_df['calculated_risk'] += indication_risk.get(indication, 1)
     
+    # --- UPDATED: Operation (New IDs 1-6) ---
     operation = int(patient_info.get('Operation', 1))
     operation_risk = {
-        1: 2,   # Rectosigmoid
-        2: 2,   # Left hemi
-        3: 3,   # Extended left
-        4: 2,   # Right hemi
-        5: 3,   # Extended right
-        6: 3,   # Transverse
-        7: 4,   # Hartmann conversion
-        8: 1,   # Ileocaecal (Lower risk)
-        9: 4,   # Total colectomy
-        10: 3,  # High anterior
-        11: 6,  # Low anterior resection (Highest risk)
-        12: 5,  # Abdominoperineal
-        13: 2,  # Adhesiolysis + bowel
-        14: 1,  # Adhesiolysis only
-        15: 4,  # Hartmann resection
-        16: 2,  # Colon segment
-        17: 1   # Small bowel
+        1: 3,   # Rectosigmoid (Higher risk due to location)
+        2: 2,   # Left Hemicolectomy
+        3: 1,   # Right Hemicolectomy (Generally lower risk)
+        4: 2,   # Transverse Colectomy
+        5: 1,   # Ileocaecal Resection (Lower risk)
+        6: 1    # Colon Segment Resection
     }
     risk_df['calculated_risk'] += operation_risk.get(operation, 2)
     
-    # Type of Anastomosis (Colorectal/Ileorectal are riskier than Ileocolonic)
+    # --- UPDATED: Anastomosis Type (New IDs: 1=Colon, 2=Ileocolonic) ---
     anast_type = int(patient_info.get('Type of Anastomosis', 1))
-    anast_type_risk = {1: 1, 2: 3, 3: 1, 4: 3, 5: 4, 6: 4, 7: 1, 8: 1}
+    # Ileocolonic (2) is often safer/lower leak rate than Colo-colonic (1)
+    anast_type_risk = {1: 2, 2: 0}
     risk_df['calculated_risk'] += anast_type_risk.get(anast_type, 1)
-    
-    # Anastomotic Technique (Hand-sewn or mixed often implies complexity)
+
+    # --- UPDATED: Anastomotic Technique (New IDs: 1=Stapler, 2=Hand-Sewn) ---
     anast_tech = int(patient_info.get('Anastomotic Technique', 1))
-    # 1: Stapler, 2: Hand-sewn, 3: Both
-    anast_tech_risk = {1: 0, 2: 1.5, 3: 2, 4: 1}
+    # Hand-sewn (2) often associated with slightly higher variability/risk
+    anast_tech_risk = {1: 0, 2: 1.5}
     risk_df['calculated_risk'] += anast_tech_risk.get(anast_tech, 0)
     
     # Anastomotic Configuration (Minor impact relative to others)
@@ -529,31 +580,28 @@ if selected == 'Prediction':
     st.sidebar.title("Patient Info")
     st.sidebar.subheader("Please choose parameters")
     
-    # MODIFICATION: Moved "Not Available" checkbox below each input feature
-    # The value will be set to -1 if the box is checked.
-    
+   
     # Sidebar layout
     st.sidebar.title("Patient Info")
     st.sidebar.subheader("Please choose parameters")
-    
+        
     # --- Numeric Inputs ---
     
     # Age
-    age_placeholder = st.sidebar.empty() # 1. Create a placeholder for the input widget.
-    age_na = st.sidebar.checkbox("Age: Not Available", key="age_na") # 2. Display the checkbox below the placeholder.
+    age_placeholder = st.sidebar.empty() 
+    age_na = st.sidebar.checkbox("Age: Not Available", key="age_na")
     
     if not age_na:
-        # 3. If unchecked, fill the placeholder with the number input.
-        age = age_placeholder.number_input("Age (Years):", step=1.0, value=40.0)
+        # CHANGED: Replaced number_input with slider for faster selection
+        age = age_placeholder.slider("Age (Years):", min_value=18.0, max_value=100.0, value=40.0, step=1.0)
     else:
-        # 4. If checked, the placeholder remains empty and we set the value.
         age = -1
     
     # BMI
     bmi_placeholder = st.sidebar.empty()
     bmi_na = st.sidebar.checkbox("BMI: Not Available", key="bmi_na")
     if not bmi_na:
-        bmi = bmi_placeholder.number_input("Preoperative BMI:", step=0.5, value=25.0)
+        bmi = bmi_placeholder.slider("Preoperative BMI:", min_value=10.0, max_value=60.0, value=25.0, step=0.5)
     else:
         bmi = -1
     
@@ -561,7 +609,7 @@ if selected == 'Prediction':
     hgb_lvl_placeholder = st.sidebar.empty()
     hgb_lvl_na = st.sidebar.checkbox("Hemoglobin Level(g/dL): Not Available", key="hgb_lvl_na")
     if not hgb_lvl_na:
-        preoperative_hemoglobin_level = hgb_lvl_placeholder.number_input("Hemoglobin Level (g/dL):", step=0.1, value=12.0)
+        preoperative_hemoglobin_level = hgb_lvl_placeholder.slider("Hemoglobin Level (g/dL):", min_value=4.0, max_value=20.0, value=12.0, step=0.1)
     else:
         preoperative_hemoglobin_level = -1
     
@@ -569,7 +617,7 @@ if selected == 'Prediction':
     wbc_count_placeholder = st.sidebar.empty()
     wbc_count_na = st.sidebar.checkbox("White blood cell count: Not Available", key="wbc_count_na")
     if not wbc_count_na:
-        preoperative_leukocyte_count_level = wbc_count_placeholder.number_input("White blood cell count (WBC) (10³/µL):", step=0.1, value=7.0)
+        preoperative_leukocyte_count_level = wbc_count_placeholder.slider("White blood cell count (WBC) (10³/µL):", min_value=0.0, max_value=50.0, value=7.0, step=0.1)
     else:
         preoperative_leukocyte_count_level = -1
     
@@ -577,7 +625,7 @@ if selected == 'Prediction':
     alb_lvl_placeholder = st.sidebar.empty()
     alb_lvl_na = st.sidebar.checkbox("Albumin Level: Not Available", key="alb_lvl_na")
     if not alb_lvl_na:
-        alb_lvl = alb_lvl_placeholder.number_input("Albumin Level (g/dL):", step=0.1, value=4.0)
+        alb_lvl = alb_lvl_placeholder.slider("Albumin Level (g/dL):", min_value=1.0, max_value=6.0, value=4.0, step=0.1)
     else:
         alb_lvl = -1
     
@@ -585,7 +633,8 @@ if selected == 'Prediction':
     crp_lvl_placeholder = st.sidebar.empty()
     crp_lvl_na = st.sidebar.checkbox("CRP Level: Not Available", key="crp_lvl_na")
     if not crp_lvl_na:
-        crp_lvl = crp_lvl_placeholder.number_input("CRP Level (mg/L):", step=0.1, value=5.0)
+        # Increased max_value to 300 for severe cases, and step to 1.0 for easier sliding
+        crp_lvl = crp_lvl_placeholder.slider("CRP Level (mg/L):", min_value=0.0, max_value=300.0, value=5.0, step=1.0)
     else:
         crp_lvl = -1
     
